@@ -1,6 +1,8 @@
 """Module containing CallPyBack implementation"""
 
-from callpyback.utils import _default_callback, args_to_kwargs
+from functools import wraps
+
+from callpyback.utils import args_to_kwargs
 from callpyback.mixins.base import BaseCallBackMixin
 from callpyback.mixins.extended import ExtendedCallBackMixin
 
@@ -75,9 +77,9 @@ class CallPyBack(BaseCallBackMixin, ExtendedCallBackMixin):
             RuntimeError: Raised if `pass_vars` is defined but `on_end`
             callback is not.
         """
-        if self.pass_vars and self.on_end is _default_callback:
+        if self.pass_vars and len(self.on_end) == 0:
             raise RuntimeError(
-                "If `pass_vars` is defined, `on_end` must be defined.",
+                "If `pass_vars` is defined, `on_end` must be added.",
             )
 
     def __call__(self, func):
@@ -98,6 +100,7 @@ class CallPyBack(BaseCallBackMixin, ExtendedCallBackMixin):
             N/A
         """
 
+        @wraps(func)
         def _wrapper(*func_args, **func_kwargs):
             """Decorator class wrapper accepting `args` and `kwargs` for the
             decorated function.
@@ -137,6 +140,7 @@ class CallPyBack(BaseCallBackMixin, ExtendedCallBackMixin):
             func_exception: Raised if error occurs during function execution,
             only if `on_end` handler is not defined.
         """
+
         self.validate_arguments()
         self.set_tracer_profile(self.tracer)
         all_func_kwargs = args_to_kwargs(func, func_args, func_kwargs)
@@ -145,16 +149,17 @@ class CallPyBack(BaseCallBackMixin, ExtendedCallBackMixin):
             self.run_on_call_func(func, all_func_kwargs)
             func_result = func(**all_func_kwargs)
             func_scope_vars = self.get_func_scope_vars()
-            self.run_on_success_func(func, func_result, all_func_kwargs)
-            return func_result
         except self.exception_classes as ex:
             func_exception = ex
             func_scope_vars = self.get_func_scope_vars()
             self.run_on_failure_func(func, func_exception, all_func_kwargs)
             return self.default_return
+        else:
+            self.run_on_success_func(func, func_result, all_func_kwargs)
+            return func_result
         finally:
             self.set_tracer_profile(None)
-            if self.on_end is _default_callback and func_exception:
+            if len(self.on_end) == 0 and func_exception:
                 raise func_exception
             result = func_result if not func_exception else self.default_return
             self.run_on_end_func(

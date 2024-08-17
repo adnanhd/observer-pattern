@@ -1,4 +1,5 @@
 """Utility functions"""
+
 import inspect
 
 
@@ -20,7 +21,7 @@ def background_callpyback(func):
     return func
 
 
-def _default_callback():
+def _default_callback(*args, **kwds):
     """Default callback function to be used when callback is not provided."""
 
 

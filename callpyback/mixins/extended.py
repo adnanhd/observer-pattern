@@ -1,4 +1,5 @@
-"""Module containing BaseCallBackMixin implementation"""
+"""Module containing ExtendedCallBackMixin implementation"""
+
 import sys
 import inspect
 
