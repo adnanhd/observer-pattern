@@ -1,18 +1,19 @@
 import threading
 from collections import defaultdict
-from typing import Dict, Any
+from typing import Dict, Any, TypeVar, Generic
 
-class SharedVar:
-    def __init__(self, initial_value=0):
+T = TypeVar("T")
+class SharedVar(Generic[T]):
+    def __init__(self, initial_value: T):
         self._value = initial_value
         self._lock = threading.Lock()
 
-    def get(self):
+    def get(self) -> T:
         """Return the current value of the shared variable."""
         with self._lock:
             return self._value
 
-    def set(self, new_value):
+    def set(self, new_value: T):
         """Set the shared variable to a new value."""
         with self._lock:
             self._value = new_value
