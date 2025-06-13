@@ -1,250 +1,284 @@
-<a id="readme-top"></a>  
+# CallPyBack 2.0 - Advanced Callback Decorator
 
-# callpyback
-[![Python Versions](https://img.shields.io/badge/python-3.8%20%7C%203.9%20%7C%203.10-blue.svg)](https://python.org)
-[![Build Status](https://github.com/samuelgregorovic/callpyback/actions/workflows/build.yaml/badge.svg)](https://github.com/samuelgregorovic/callpyback/actions/workflows/build.yaml)
-[![Coverage Status](https://coveralls.io/repos/github/samuelgregorovic/callpyback/badge.svg)](https://coveralls.io/github/samuelgregorovic/callpyback)
-[![PyPI version](https://badge.fury.io/py/callpyback.svg)](https://badge.fury.io/py/callpyback)
-[![Known Vulnerabilities](https://snyk.io/test/github/samuelgregorovic/callpyback/badge.svg)](https://snyk.io/test/github/samuelgregorovic/callpyback)
-[![Maintainability](https://api.codeclimate.com/v1/badges/6473b57bc8600e5ad6f6/maintainability)](https://codeclimate.com/github/samuelgregorovic/callpyback/maintainability)
-[![Issues](https://img.shields.io/github/issues/samuelgregorovic/callpyback.svg?maxAge=2592000)](https://github.com/samuelgregorovic/callpyback/issues)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-![ Repo Size](https://img.shields.io/github/repo-size/samuelgregorovic/callpyback)
-[![Downloads](https://static.pepy.tech/badge/callpyback)](https://pepy.tech/project/callpyback)
-[![Project Status: Active](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
-[![Commit activity](https://img.shields.io/github/commit-activity/m/samuelgregorovic/callpyback)](https://github.com/samuelgregorovic/callpyback/pulse)
+A theoretically sound, production-ready callback decorator system implementing formal design patterns and addressing common limitations in callback architectures.
 
-"callpyback" is a comprehensive Python library designed to help developers add callbacks to their functions with ease. It comes with a range of powerful features that make it easy to customize the behavior of your functions in different stages of their execution. 
+## 🚀 Features
 
-You can specify callbacks for on_call, on_success, on_failure, and on_end, and customize the default return value from the decorated function. Additionally, you can pass local scope variables of the decorated function to the on_end callback and define expected exceptions to trigger the on_failure callback. If desired, you can also omit callbacks, falling back to default behavior, and choose which parameters of the callback function to use. Furthermore, with the @background_callback decorator, you can execute callbacks on the background, making it easier to manage concurrency in your code.
+- **🏗️ Formal Design Patterns**: Observer, State Machine, Chain of Responsibility, Strategy
+- **🔒 Thread-Safe**: Concurrent execution with proper synchronization
+- **🧠 Memory Safe**: Weak references prevent memory leaks
+- **🔧 Type Safe**: Full static type checking with protocols (Python 3.8+)
+- **⚡ Performance**: O(log n) operations with efficient data structures
+- **🧪 Testable**: Dependency injection enables comprehensive testing
+- **📊 Observable**: Built-in metrics and performance monitoring
+- **🛡️ Robust**: Error isolation with circuit breaker patterns
 
-## Features
+## 📦 Installation
 
-- Support `on_call`, `on_success`, `on_failure` and `on_end` callbacks
-- Pass decorated function **kwargs and function itself to callbacks
-- Option to specify default return from the decorated function
-- Option to pass local scope variables of the decorated function to the `on_end` callback
-- Option to specify exception classes to be expected and invoke `on_failure` callback
-- Option to omit callbacks - default callback
-- Option to omit callback's function parameters (specify only those which you need)
-- Option to execute callbacks on the background (new thread) via `@background_callpyback` decorator
-
-## Use cases
-The "callpyback" library can be useful in a variety of real-world scenarios where you need to add custom behavior to your functions at different stages of their execution. For example:
-- Debugging and logging: By using the `on_call`, `on_success`, `on_failure`, and `on_end` callbacks, you can print out messages to help you understand what's happening during the execution of your functions, for example, you may have a function that performs a database operation and you want to log each time the function is called, its parameters, and if it is successful or not. 
-- Monitoring and alerting: By using the "on_success" and "on_failure" callbacks, you can set up custom alerts to notify you when a function has completed successfully or when it has failed.
-- Error handling: By using the "on_failure" callback, you can specify how to handle exceptions raised by your functions and take appropriate actions, such as retrying the function or logging the error message.
-- Background processing: By using the "@background_callback" decorator, you can execute your callbacks on a separate thread, which can be useful in scenarios where you want to run your callbacks in parallel with the rest of your code.
-- Clean-up tasks: By using the "on_end" callback, you can specify what to do after a function has finished executing, for example to release resources or close connections.
-- Asynchronous communication between microservices in a microservice architecture.
-- Improving the performance of long-running processes by breaking them into smaller, asynchronous tasks.
-- Creating real-time, event-driven architectures for web applications, gaming, or IoT applications.
-- Implementing the Observer pattern for decoupled event-driven communication between different parts of an application.
-
-### Instalation
-Package is currently available under the same name at [![PyPI version](https://badge.fury.io/py/callpyback.svg)](https://badge.fury.io/py/callpyback).
-
-`pip install callpyback`
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
-
-### Usage
-
-### ! important note !
-In latest version of `callpyback`, when declaring callback functions, following rules must be obeyed:
-
-a) `on_call()` callback MUST eitheraccept no parameters or combination of the following:
-- `func` - will receive reference to decorated function
-- `func_kwargs` - will receive parameters passed to the function decorated with `CallPyBack`
-
-b) `on_success()` callback MUST either accept no parameters or combination of the following:
-- `func` - will receive reference to decorated function
-- `func_result` - will receive return value of the function decorated with `CallPyBack`
-- `func_kwargs` - will receive parameters passed to the function decorated with `CallPyBack`
-
-c) `on_failure()` callback MUST either accept no parameters or combination of the following:
-- `func` - will receive reference to decorated function
-- `func_exception` - will receive exception raised by the function decorated with `CallPyBack`
-- `func_kwargs` - will receive parameters passed to the function decorated with `CallPyBack`
-
-d) `on_end()` callback MUST either accept no parameters or combination of the following:
-- `func` - will receive reference to decorated function
-- `func_result` - will receive return value of the function decorated with `CallPyBack`
-- `func_exception` - will receive exception raised by the function decorated with `CallPyBack`
-- `func_kwargs` - will receive parameters passed to the function decorated with `CallPyBack`
-- `func_scope_vars` - will receive local variables of the function decorated with `CallPyBack`, whose names were specified in the `pass_vars` decorator parameter.
-
-These rules are enforced to allow omitting parameters in the callback function. This is useful when some of these parameters are not needed for the callback function. If those rules are not obeyed, error will be raised during the initialization of the `CallPyBack` decorator class.
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-#### Prerequisites
-Consider following callbacks:
-```python
-def on_call(func, func_kwargs):
-    print('-----ON CALL CALLBACK-----')
-    func_kwargs_repr = ', '.join(f'{key}={val}' for key, val in func_kwargs.items())
-    print(f'Function `{func.__name__}` called with parameters: {func_kwargs_repr}.\n')
-
-@background_callpyback
-def on_success(func, func_result, func_kwargs):
-    print('-----ON SUCCESS CALLBACK-----')
-    func_kwargs_repr = ', '.join(f'{key}={val}' for key, val in func_kwargs.items())
-    print(f'Function `{func.__name__}` successfully done with a result: {func_result}.')
-    print(f'Was called with parameters: {func_kwargs_repr}\n')
-
-@background_callpyback
-def on_failure(func, func_exception, func_kwargs):
-    print('-----ON FAILURE CALLBACK-----')
-    func_kwargs_repr = ', '.join(f'{key}={val}' for key, val in func_kwargs.items())
-    print(f'Function `{func.__name__} failed with an error: {func_exception}!')
-    print(f'Was called with parameters: {func_kwargs_repr}\n')
-
-@background_callpyback
-def on_end(func, func_result, func_exception, func_kwargs, func_scope_vars):
-    print('-----ON END CALLBACK-----')
-    func_kwargs_repr = ', '.join(f'{key}={val}' for key, val in func_kwargs.items())
-    func_scope_vars_repr = ', '.join(f'{key}={val}' for key, val in func_scope_vars.items())
-    if func_exception:
-        print(f'Function `{func.__name__} failed with an error: {func_exception}!')
-    else:
-        print('No exception was raised')
-    print(f'Function `{func.__name__}` done with a result: {func_result}.')
-    print(f'Was called with parameters: {func_kwargs_repr}')
-    print(f'Local variables of the function: {func_scope_vars_repr}')
+```bash
+pip install callpyback
 ```
-and initialization of a decorator:
+
+## 🏃‍♂️ Quick Start
+
 ```python
-custom_callpyback = CallPyBack(
-    on_call=on_call,
-    on_success=on_success,
-    on_failure=on_failure,
-    on_end=on_end,
-    default_return='default', 
-    exception_classes=(RuntimeError,),
-    pass_vars=('a',)
+from callpyback import CallPyBack, on_call, on_success, on_failure
+
+# Basic usage
+@CallPyBack(observers=[
+    on_call(lambda ctx: print(f"Calling {ctx.function_signature.name}")),
+    on_success(lambda result: print(f"Success: {result.value}")),
+    on_failure(lambda result: print(f"Error: {result.exception}"))
+])
+def divide(a, b):
+    if b == 0:
+        raise ValueError("Cannot divide by zero")
+    return a / b
+
+result = divide(10, 2)  # Prints call and success messages
+# Output:
+# Calling divide
+# Success: 5.0
+```
+
+## 🔧 Advanced Features
+
+### Variable Extraction
+Capture local variables from function execution:
+
+```python
+@CallPyBack(
+    observers=[on_success(lambda local_variables: print(f"Variables: {local_variables}"))],
+    variable_names=['intermediate', 'final']
 )
-```
-These will be used in following examples:
+def calculation(x):
+    intermediate = x * 2
+    final = intermediate + 10
+    return final
 
-#### 1. Decorated function executes without error
+calculation(5)
+# Output: Variables: {'intermediate': 10, 'final': 20}
+```
+
+### Custom Observers
+Create sophisticated monitoring systems:
+
 ```python
+from callpyback import BaseObserver, ExecutionContext
 
-@custom_callpyback
-def method(x, y, z=None):
-    a = 42
-    return x + y
+class DatabaseObserver(BaseObserver):
+    def update(self, context: ExecutionContext) -> None:
+        # Log to database
+        self.db.log(context.function_signature.name, context.timestamp)
 
-result = method(1, 2)
-print(f'Result: {result}')
+@CallPyBack(observers=[DatabaseObserver()])
+def important_function():
+    return "critical result"
 ```
-will result in
-```bash
------ON CALL CALLBACK-----
-Function `method` called with parameters: x=1, y=2, z=None.
 
-Result: 3
+### Built-in Observers
+Leverage ready-made observers for common use cases:
 
------ON SUCCESS CALLBACK-----
-Function `method` successfully done with a result: 3.
-Was called with parameters: x=1, y=2, z=None
-
------ON END CALLBACK-----
-No exception was raised
-Function `method` done with a result: 3.
-Was called with parameters: x=1, y=2, z=None
-Local variables of the function: a=42
-
-```
-`on_success` and `on_end` will be executed on the background thread, while `on_call` will be executed in a blocking way and `on_failure` will not be called.
-
-#### 2. Decorated function raises an error
 ```python
+from callpyback.observers.builtin import LoggingObserver, MetricsObserver, TimingObserver
 
-@custom_callpyback
-def method(x, y, z=None):
-    a = 42
-    raise RuntimeError("some error")
-
-result = method(1, 2)
-print(f'Result: {result}')
+@CallPyBack(observers=[
+    LoggingObserver(),              # Structured logging
+    MetricsObserver(),              # Performance metrics
+    TimingObserver(threshold=1.0)   # Slow execution alerts
+])
+def monitored_function():
+    return "result"
 ```
-will result in
+
+### Error Handling
+Sophisticated error management with fallback values:
+
+```python
+@CallPyBack(
+    observers=[on_failure(handle_error)],
+    exception_classes=(ValueError, TypeError),
+    default_return="fallback_value"
+)
+def risky_function():
+    raise ValueError("Something went wrong")
+    
+result = risky_function()  # Returns "fallback_value"
+```
+
+### Thread Safety
+Built-in support for concurrent execution:
+
+```python
+@CallPyBack(
+    observers=[MetricsObserver()],
+    enable_async_observers=True  # Observers run in background
+)
+def concurrent_function(data):
+    return process_data(data)
+
+# Safe to call from multiple threads
+```
+
+## 🏛️ Architecture
+
+CallPyBack 2.0 is built on solid theoretical foundations:
+
+### Design Patterns
+- **Observer Pattern**: Decoupled event notifications with priority ordering
+- **State Machine**: Formal execution flow management with validation
+- **Strategy Pattern**: Pluggable algorithms for variable extraction and error handling
+- **Chain of Responsibility**: Composable error handling chains
+- **Repository Pattern**: Observer lifecycle management with weak references
+- **Factory Pattern**: Convenient observer creation functions
+
+### Core Components
+- **ExecutionContext**: Immutable state container with full execution information
+- **StateMachine**: Thread-safe state transitions with validation
+- **ObserverManager**: Concurrent observer coordination with error isolation
+- **VariableExtractor**: Safe local variable capture using `sys.setprofile`
+- **ErrorHandler**: Chainable error handling with circuit breaker patterns
+
+## 📊 Performance
+
+CallPyBack 2.0 is optimized for production use:
+
+- **Observer Lookup**: O(log n) with indexed priority queues
+- **Memory Usage**: Weak references prevent observer memory leaks
+- **Concurrency**: Lock-free operations where possible
+- **Error Isolation**: Observer failures don't impact function execution
+- **Variable Extraction**: Minimal overhead with optional extraction
+
+## 🧪 Testing
+
+CallPyBack provides comprehensive testing support:
+
+```python
+from callpyback.core.time_sources import MockTimeSource
+
+# Mock time for deterministic testing
+mock_time = MockTimeSource(1000.0)
+decorator = CallPyBack(time_source=mock_time)
+
+@decorator
+def test_function():
+    mock_time.advance(0.5)  # Simulate execution time
+    return "result"
+
+# Execution time will be exactly 0.5 seconds
+```
+
+## 📈 Migration from CallPyBack 1.x
+
+CallPyBack 2.0 provides backward compatibility:
+
+```python
+# Old way (still works)
+@CallPyBack(
+    on_call=lambda f, kwargs: print("called"),
+    on_success=lambda f, result: print("success")
+)
+def my_function():
+    return "result"
+
+# New way (recommended)
+@CallPyBack(observers=[
+    on_call(lambda ctx: print("called")),
+    on_success(lambda result: print("success"))
+])
+def my_function():
+    return "result"
+```
+
+## 🔍 Monitoring & Observability
+
+### Built-in Metrics
+```python
+metrics = MetricsObserver()
+
+@CallPyBack(observers=[metrics])
+def monitored_function():
+    return "result"
+
+# Get comprehensive metrics
+stats = metrics.get_metrics()
+print(f"Total executions: {stats['total_executions']}")
+print(f"Average time: {stats['average_execution_time']:.3f}s")
+```
+
+### Performance Alerts
+```python
+timing = TimingObserver(threshold=0.1)  # 100ms threshold
+
+@CallPyBack(observers=[timing])
+def potentially_slow_function():
+    time.sleep(0.2)  # Will trigger slow execution alert
+    return "result"
+```
+
+## 🛠️ Development
+
+### Setup
 ```bash
------ON CALL CALLBACK-----
-Function `method` called with parameters: x=1, y=2, z=None.
-
------ON FAILURE CALLBACK-----
-Function `method` failed with an error: some error!
-Was called with parameters: x=1, y=2, z=None
-
------ON END CALLBACK-----
-Function `method` failed with an error: some error!
-Function `method` done with a result: default.
-Was called with parameters: x=1, y=2, z=None
-Local variables of the function: a=42
-
+git clone https://github.com/callpyback/callpyback
+cd callpyback
+pip install -e ".[dev]"
 ```
-`on_failure` and `on_end` will be executed on the background thread, while `on_call` will be executed in a blocking way and `on_success` will not be called.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+### Testing
+```bash
+# Run tests
+pytest
 
+# Run with coverage
+pytest --cov=callpyback --cov-report=html
 
-## Roadmap
+# Type checking
+mypy callpyback/
 
-- [x] Add Changelog
-- [x] Support `on_call`, `on_success`, `on_failure` and `on_end` callbacks
-- [x] Option to specify default return from the decorated function
-- [x] Option to pass local scope variables of the decorated function to the `on_end` callback
-- [x] Option to specify exception classes to be expected and invoke `on_failure` callback
-- [x] Option to omit callbacks - default callback
-- [x] Option to omit callback's function parameters (specify only those which you need)
-- [x] Option to execute callbacks on the background (new thread) via `@background_callpyback` decorator
-- [x] Option to pass decorated function reference to all callbacks
-- [ ] To be determined...
+# Code formatting
+black callpyback/
+isort callpyback/
+```
 
-See the [open issues](https://github.com/samuelgregorovic/callpyback/issues) for a full list of proposed features (and known issues).
+## 🤝 Contributing
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Add tests for new functionality
+4. Ensure all tests pass (`pytest`)
+5. Format code (`black . && isort .`)
+6. Submit a pull request
 
+## 📚 Documentation
 
+- [API Reference](https://callpyback.readthedocs.io/api/)
+- [User Guide](https://callpyback.readthedocs.io/guide/)
+- [Examples](examples/)
+- [Migration Guide](https://callpyback.readthedocs.io/migration/)
 
-<!-- CONTRIBUTING -->
-## Contributing
+## 🆚 Comparison with Other Solutions
 
-Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
+| Feature | CallPyBack 2.0 | Decorators | functools | Custom Solutions |
+|---------|----------------|------------|-----------|------------------|
+| Type Safety | ✅ Full | ❌ None | ❌ None | ⚠️ Manual |
+| Thread Safety | ✅ Built-in | ❌ Manual | ❌ Manual | ⚠️ Manual |
+| Memory Safety | ✅ Weak refs | ❌ Manual | ❌ Manual | ⚠️ Manual |
+| Error Isolation | ✅ Circuit breaker | ❌ None | ❌ None | ⚠️ Manual |
+| Performance | ✅ O(log n) | ⚠️ O(n) | ⚠️ O(n) | ❓ Varies |
+| Extensibility | ✅ Plugin system | ❌ Limited | ❌ Limited | ❓ Varies |
+| Testing | ✅ DI + Mocks | ❌ Difficult | ❌ Difficult | ⚠️ Manual |
 
-If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
-Don't forget to give the project a star! Thanks again!
+## 📄 License
 
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/feature-name`)
-3. Commit your Changes (`git commit -m 'Add some FeatureName'`)
-4. Push to the Branch (`git push origin feature/feature-name`)
-5. Open a Pull Request
-6. Let us review your magical feature
+MIT License - see [LICENSE](LICENSE) file for details.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+## 🙏 Acknowledgments
 
+- Inspired by the Gang of Four design patterns
+- Built on solid software engineering principles
+- Community feedback and contributions
 
+---
 
-<!-- LICENSE -->
-## License
-
-Distributed under the MIT License. See [`LICENSE.txt`](https://github.com/samuelgregorovic/callpyback/blob/main/LICENSE.txt) for more information.
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
-
-<!-- CONTACT -->
-## Contact
-
-Samuel Gregorovič - [samuel-gregorovic](https://www.linkedin.com/in/samuel-gregorovic) - samuelgregorovic@gmail.com
-
-Project Link: [https://github.com/samuelgregorovic/callpyback](https://github.com/samuelgregorovic/callpyback)
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+**CallPyBack 2.0** - Transform your Python functions into observable, robust, and maintainable components with enterprise-grade callback management.
