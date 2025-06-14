@@ -411,9 +411,7 @@ class TestCallPyBackArgumentMerging:
         captured_args = calls[0]
         assert captured_args["a"] == "first"
         assert captured_args["b"] == 20
-        # kwargs get unpacked into the arguments dict
-        assert "kwargs" in captured_args
-        assert captured_args["kwargs"] == {"extra": "value"}
+        assert captured_args["extra"] == "value"
 
 
 class TestCallPyBackMetrics:

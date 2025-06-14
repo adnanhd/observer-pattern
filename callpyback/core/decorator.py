@@ -182,6 +182,8 @@ class CallPyBack:
 
             # Execute with variable extraction
             with self._variable_extractor.setup_extraction():
+                arguments.update(arguments.pop("kwargs", {}))
+
                 if self._max_execution_time:
                     result = self._execute_with_timeout(func, arguments)
                 else:

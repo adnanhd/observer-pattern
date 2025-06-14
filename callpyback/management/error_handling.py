@@ -25,8 +25,17 @@ class ErrorLoggingConfig:
         self.max_error_message_length = max_error_message_length
         self.mask_sensitive_keys = mask_sensitive_keys
         self.sensitive_keys = sensitive_keys or {
-            'password', 'token', 'secret', 'key', 'auth', 'credential',
-            'pass', 'pwd', 'api_key', 'access_token', 'refresh_token'
+            "password",
+            "token",
+            "secret",
+            "key",
+            "auth",
+            "credential",
+            "pass",
+            "pwd",
+            "api_key",
+            "access_token",
+            "refresh_token",
         }
 
 
@@ -43,7 +52,9 @@ def configure_error_logging(**kwargs) -> None:
             setattr(_ERROR_LOG_CONFIG, key, value)
 
 
-def _safe_serialize_arguments(arguments: Dict[str, Any], config: ErrorLoggingConfig) -> str:
+def _safe_serialize_arguments(
+    arguments: Dict[str, Any], config: ErrorLoggingConfig
+) -> str:
     """Safely serialize function arguments for logging."""
     if not config.include_arguments:
         return f"<{len(arguments)} arguments>"
@@ -79,7 +90,7 @@ def _safe_serialize_arguments(arguments: Dict[str, Any], config: ErrorLoggingCon
 
         # Truncate if too long
         if len(json_str) > config.max_arg_length:
-            truncated = json_str[:config.max_arg_length - 3] + "..."
+            truncated = json_str[: config.max_arg_length - 3] + "..."
             return truncated
 
         return json_str
@@ -93,7 +104,7 @@ def _truncate_error_message(error: Exception, config: ErrorLoggingConfig) -> str
     """Safely truncate error message."""
     error_msg = str(error)
     if len(error_msg) > config.max_error_message_length:
-        return error_msg[:config.max_error_message_length - 3] + "..."
+        return error_msg[: config.max_error_message_length - 3] + "..."
     return error_msg
 
 
@@ -132,10 +143,12 @@ def structured_log_message(
 
     # Add error information if provided
     if error:
-        components.extend([
-            f"[Error Type: {error.__class__.__name__}]",
-            f"[Error Message: {_truncate_error_message(error, config)}]",
-        ])
+        components.extend(
+            [
+                f"[Error Type: {error.__class__.__name__}]",
+                f"[Error Message: {_truncate_error_message(error, config)}]",
+            ]
+        )
 
     # Add arguments
     args_str = _safe_serialize_arguments(context.arguments, config)
@@ -199,7 +212,7 @@ class NoErrorHandler(ErrorHandler):
                 description="No handler found for error - chain processing complete",
                 context=context,
                 error=error,
-                action="Re-raising original error for caller handling"
+                action="Re-raising original error for caller handling",
             )
         )
         raise error
@@ -217,9 +230,7 @@ class TimeoutErrorHandler(ErrorHandler):
     """Handler for timeout-related errors."""
 
     def __init__(
-        self,
-        default_return: Any = None,
-        successor: ErrorHandler = NO_ERROR_HANDLER
+        self, default_return: Any = None, successor: ErrorHandler = NO_ERROR_HANDLER
     ):
         super().__init__(successor)
         self._default_return = default_return
@@ -236,7 +247,7 @@ class TimeoutErrorHandler(ErrorHandler):
                 context=context,
                 error=error,
                 action=f"Returning default value: {self._default_return}",
-                extra_fields={"Default Return": self._default_return}
+                extra_fields={"Default Return": self._default_return},
             )
         )
         return self._default_return
@@ -260,7 +271,7 @@ class ValidationErrorHandler(ErrorHandler):
                 context=context,
                 error=error,
                 action="Re-raising for developer attention",
-                extra_fields={"Severity": "High - Programming Error"}
+                extra_fields={"Severity": "High - Programming Error"},
             )
         )
         # Re-raise validation errors as they indicate programming errors
@@ -285,7 +296,11 @@ class FlexibleValidationErrorHandler(ErrorHandler):
 
     def handle(self, error: Exception, context: ExecutionContext) -> Any:
         """Handle validation error based on configuration."""
-        action = "Re-raising error" if self._reraise_validation_errors else "Returning default value"
+        action = (
+            "Re-raising error"
+            if self._reraise_validation_errors
+            else "Returning default value"
+        )
 
         if self._reraise_validation_errors:
             logger.error(
@@ -298,8 +313,8 @@ class FlexibleValidationErrorHandler(ErrorHandler):
                     extra_fields={
                         "Reraise Config": self._reraise_validation_errors,
                         "Default Return": self._default_return,
-                        "Handler Mode": "Strict"
-                    }
+                        "Handler Mode": "Strict",
+                    },
                 )
             )
         else:
@@ -313,8 +328,8 @@ class FlexibleValidationErrorHandler(ErrorHandler):
                     extra_fields={
                         "Reraise Config": self._reraise_validation_errors,
                         "Default Return": self._default_return,
-                        "Handler Mode": "Graceful"
-                    }
+                        "Handler Mode": "Graceful",
+                    },
                 )
             )
 
@@ -366,8 +381,8 @@ class NetworkErrorHandler(ErrorHandler):
                 extra_fields={
                     "Retry Count": self._retry_count,
                     "Default Return": self._default_return,
-                    "Error Category": "Network/Connection"
-                }
+                    "Error Category": "Network/Connection",
+                },
             )
         )
 
@@ -381,8 +396,8 @@ class NetworkErrorHandler(ErrorHandler):
                     action=f"Will retry {self._retry_count} more times before returning default",
                     extra_fields={
                         "Retries Remaining": self._retry_count,
-                        "Retry Strategy": "Exponential backoff recommended"
-                    }
+                        "Retry Strategy": "Exponential backoff recommended",
+                    },
                 )
             )
             # Note: Actual retry implementation would require access to the original function
@@ -430,8 +445,8 @@ class BusinessLogicErrorHandler(ErrorHandler):
                     extra_fields={
                         "Mapped Result": result,
                         "Mapping Strategy": "Custom error type mapping",
-                        "Available Mappings": len(self._error_mapping)
-                    }
+                        "Available Mappings": len(self._error_mapping),
+                    },
                 )
             )
             return result
@@ -455,8 +470,8 @@ class BusinessLogicErrorHandler(ErrorHandler):
                 extra_fields={
                     "Response Type": "Structured Error Object",
                     "Contains Context": True,
-                    "Error Category": "Business Logic"
-                }
+                    "Error Category": "Business Logic",
+                },
             )
         )
 
@@ -505,8 +520,8 @@ class SecurityErrorHandler(ErrorHandler):
                     "Incident ID": incident_id,
                     "Severity": "CRITICAL",
                     "Requires Review": True,
-                    "Access Denied": True
-                }
+                    "Access Denied": True,
+                },
             )
         )
 
@@ -521,8 +536,8 @@ class SecurityErrorHandler(ErrorHandler):
                 extra_fields={
                     "Incident ID": incident_id,
                     "Audit Logged": True,
-                    "Response Type": "Generic denial (no sensitive info)"
-                }
+                    "Response Type": "Generic denial (no sensitive info)",
+                },
             )
         )
 
@@ -564,14 +579,14 @@ class DefaultErrorHandler(ErrorHandler):
                     extra_fields={
                         "Handler Type": "Fallback/Catch-all",
                         "Default Return": self._default_return,
-                        "Stack Trace Available": True
-                    }
+                        "Stack Trace Available": True,
+                    },
                 )
             )
             # Add stack trace in a separate log entry for clarity
             logger.error(
                 f"STACK TRACE for {context.function_signature.name} | {error.__class__.__name__}: {str(error)}",
-                exc_info=True
+                exc_info=True,
             )
 
         return self._default_return
@@ -604,9 +619,11 @@ class ConditionalErrorHandler(ErrorHandler):
                     action="Skipping conditional handler due to condition failure",
                     extra_fields={
                         "Original Error": error.__class__.__name__,
-                        "Condition Function": getattr(self._condition_func, '__name__', 'anonymous'),
-                        "Handler Skipped": True
-                    }
+                        "Condition Function": getattr(
+                            self._condition_func, "__name__", "anonymous"
+                        ),
+                        "Handler Skipped": True,
+                    },
                 )
             )
             return False
@@ -622,10 +639,14 @@ class ConditionalErrorHandler(ErrorHandler):
                     error=error,
                     action="Executing custom handler logic",
                     extra_fields={
-                        "Condition Function": getattr(self._condition_func, '__name__', 'anonymous'),
-                        "Handler Function": getattr(self._handler_func, '__name__', 'anonymous'),
-                        "Handler Type": "Custom conditional"
-                    }
+                        "Condition Function": getattr(
+                            self._condition_func, "__name__", "anonymous"
+                        ),
+                        "Handler Function": getattr(
+                            self._handler_func, "__name__", "anonymous"
+                        ),
+                        "Handler Type": "Custom conditional",
+                    },
                 )
             )
             return self._handler_func(error, context)
@@ -639,9 +660,11 @@ class ConditionalErrorHandler(ErrorHandler):
                     action="Re-raising original error due to handler failure",
                     extra_fields={
                         "Original Error": f"{error.__class__.__name__}: {str(error)[:50]}",
-                        "Handler Function": getattr(self._handler_func, '__name__', 'anonymous'),
-                        "Fallback Action": "Re-raise original"
-                    }
+                        "Handler Function": getattr(
+                            self._handler_func, "__name__", "anonymous"
+                        ),
+                        "Fallback Action": "Re-raise original",
+                    },
                 )
             )
             raise error  # Re-raise original error if handler fails
@@ -838,7 +861,7 @@ def example_error_logging_setup():
         max_arg_length=300,
         max_error_message_length=200,
         mask_sensitive_keys=True,
-        sensitive_keys={'password', 'token', 'secret', 'api_key'}
+        sensitive_keys={"password", "token", "secret", "api_key"},
     )
 
     # Production environment - more restricted logging

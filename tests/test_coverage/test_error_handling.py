@@ -58,7 +58,7 @@ class TestTimeoutErrorHandler:
         error = ValueError("Not a timeout")
         assert handler.can_handle(error, sample_context) is False
 
-    @patch("callpyback.management.error_handling.logging")
+    @patch("callpyback.management.error_handling.logger")
     def test_timeout_error_handler_handle(self, mock_logging, sample_context):
         """Test TimeoutErrorHandler.handle method."""
         handler = TimeoutErrorHandler(default_return="timeout_result")
@@ -122,7 +122,7 @@ class TestValidationErrorHandler:
         error = RuntimeError("Runtime error")
         assert handler.can_handle(error, sample_context) is False
 
-    @patch("callpyback.management.error_handling.logging")
+    @patch("callpyback.management.error_handling.logger")
     def test_validation_error_handler_handle_reraises(
         self, mock_logging, sample_context
     ):
@@ -148,7 +148,7 @@ class TestFlexibleValidationErrorHandler:
 
         error = ValueError("Validation failed")
 
-        with patch("callpyback.management.error_handling.logging"):
+        with patch("callpyback.management.error_handling.logger"):
             with pytest.raises(ValueError):
                 handler.handle(error, sample_context)
 
@@ -160,7 +160,7 @@ class TestFlexibleValidationErrorHandler:
 
         error = ValueError("Validation failed")
 
-        with patch("callpyback.management.error_handling.logging"):
+        with patch("callpyback.management.error_handling.logger"):
             result = handler.handle(error, sample_context)
             assert result == "handled_error"
 
@@ -193,7 +193,7 @@ class TestNetworkErrorHandler:
         error = HTTPError("HTTP failed")
         assert handler.can_handle(error, sample_context) is True
 
-    @patch("callpyback.management.error_handling.logging")
+    @patch("callpyback.management.error_handling.logger")
     def test_network_error_handler_handle_with_retry(
         self, mock_logging, sample_context
     ):
@@ -243,7 +243,7 @@ class TestBusinessLogicErrorHandler:
 
         error = ValueError("Business failed")
 
-        with patch("callpyback.management.error_handling.logging"):
+        with patch("callpyback.management.error_handling.logger"):
             result = handler.handle(error, sample_context)
             assert result == {"status": "mapped", "code": "VAL_ERROR"}
 
@@ -253,7 +253,7 @@ class TestBusinessLogicErrorHandler:
 
         error = RuntimeError("Business rule failed")
 
-        with patch("callpyback.management.error_handling.logging"):
+        with patch("callpyback.management.error_handling.logger"):
             result = handler.handle(error, sample_context)
             assert result["error"] is True
             assert result["error_type"] == "business_logic"
@@ -316,7 +316,7 @@ class TestDefaultErrorHandler:
 
         error = RuntimeError("Unhandled error")
 
-        with patch("callpyback.management.error_handling.logging") as mock_logging:
+        with patch("callpyback.management.error_handling.logger") as mock_logging:
             result = handler.handle(error, sample_context)
             assert result == "default_value"
             mock_logging.error.assert_called_once()
@@ -327,7 +327,7 @@ class TestDefaultErrorHandler:
 
         error = RuntimeError("Unhandled error")
 
-        with patch("callpyback.management.error_handling.logging") as mock_logging:
+        with patch("callpyback.management.error_handling.logger") as mock_logging:
             result = handler.handle(error, sample_context)
             assert result == "default_value"
             mock_logging.error.assert_not_called()
@@ -380,7 +380,7 @@ class TestConditionalErrorHandler:
 
         error = ValueError("Test error")
 
-        with patch("callpyback.management.error_handling.logging"):
+        with patch("callpyback.management.error_handling.logger"):
             assert handler.can_handle(error, sample_context) is False
 
     def test_conditional_error_handler_handler_exception(self, sample_context):
@@ -396,7 +396,7 @@ class TestConditionalErrorHandler:
 
         error = ValueError("Test error")
 
-        with patch("callpyback.management.error_handling.logging"):
+        with patch("callpyback.management.error_handling.logger"):
             with pytest.raises(ValueError):  # Original error re-raised
                 handler.handle(error, sample_context)
 
