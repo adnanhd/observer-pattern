@@ -1,9 +1,9 @@
-"""Error handling implementations."""
+"""Error handling implementations with Null Object pattern."""
 
 import logging
 from abc import ABC, abstractmethod
 
-from typing_compat import Any, Optional
+from typing_compat import Any, Callable, Optional
 
 from callpyback.core.context import ExecutionContext
 
@@ -11,7 +11,7 @@ from callpyback.core.context import ExecutionContext
 class ErrorHandler(ABC):
     """Abstract base class for error handlers (Chain of Responsibility)."""
 
-    def __init__(self, successor: Optional["ErrorHandler"] = None):
+    def __init__(self, successor: "ErrorHandler"):
         self._successor = successor
 
     @abstractmethod
@@ -28,18 +28,44 @@ class ErrorHandler(ABC):
         """Handle error using chain of responsibility."""
         if self.can_handle(error, context):
             return self.handle(error, context)
-        elif self._successor:
-            return self._successor.handle_error(error, context)
         else:
-            # No handler found, re-raise
-            raise error
+            return self._successor.handle_error(error, context)
+
+
+class NoErrorHandler(ErrorHandler):
+    """Null object handler that re-raises errors (terminal handler)."""
+
+    def __init__(self):
+        # No successor needed for terminal handler
+        pass
+
+    def can_handle(self, error: Exception, context: ExecutionContext) -> bool:
+        return True  # Always handles by re-raising
+
+    def handle(self, error: Exception, context: ExecutionContext) -> Any:
+        """Re-raise the error since no handler could process it."""
+        logging.debug(
+            f"No handler found for {error.__class__.__name__} in "
+            f"{context.function_signature.name}. Re-raising error."
+        )
+        raise error
+
+    def handle_error(self, error: Exception, context: ExecutionContext) -> Any:
+        """Handle error by re-raising (terminal behavior)."""
+        return self.handle(error, context)
+
+
+# Singleton instance for reuse
+NO_ERROR_HANDLER = NoErrorHandler()
 
 
 class TimeoutErrorHandler(ErrorHandler):
     """Handler for timeout-related errors."""
 
     def __init__(
-        self, default_return: Any = None, successor: Optional[ErrorHandler] = None
+        self,
+        default_return: Any = None,
+        successor: ErrorHandler = NO_ERROR_HANDLER
     ):
         super().__init__(successor)
         self._default_return = default_return
@@ -59,7 +85,7 @@ class TimeoutErrorHandler(ErrorHandler):
 class ValidationErrorHandler(ErrorHandler):
     """Handler for validation errors (usually re-raises)."""
 
-    def __init__(self, successor: Optional[ErrorHandler] = None):
+    def __init__(self, successor: ErrorHandler = NO_ERROR_HANDLER):
         super().__init__(successor)
 
     def can_handle(self, error: Exception, context: ExecutionContext) -> bool:
@@ -82,7 +108,7 @@ class FlexibleValidationErrorHandler(ErrorHandler):
         self,
         reraise_validation_errors: bool = True,
         default_return: Any = None,
-        successor: Optional[ErrorHandler] = None,
+        successor: ErrorHandler = NO_ERROR_HANDLER,
     ):
         super().__init__(successor)
         self._reraise_validation_errors = reraise_validation_errors
@@ -113,7 +139,7 @@ class NetworkErrorHandler(ErrorHandler):
         self,
         retry_count: int = 0,
         default_return: Any = None,
-        successor: Optional[ErrorHandler] = None,
+        successor: ErrorHandler = NO_ERROR_HANDLER,
     ):
         super().__init__(successor)
         self._retry_count = retry_count
@@ -159,7 +185,7 @@ class BusinessLogicErrorHandler(ErrorHandler):
     def __init__(
         self,
         error_mapping: Optional[dict] = None,
-        successor: Optional[ErrorHandler] = None,
+        successor: ErrorHandler = NO_ERROR_HANDLER,
     ):
         super().__init__(successor)
         self._error_mapping = error_mapping or {}
@@ -210,7 +236,7 @@ class SecurityErrorHandler(ErrorHandler):
     def __init__(
         self,
         audit_logger: Optional[logging.Logger] = None,
-        successor: Optional[ErrorHandler] = None,
+        successor: ErrorHandler = NO_ERROR_HANDLER,
     ):
         super().__init__(successor)
         self._audit_logger = audit_logger or logging.getLogger("security_audit")
@@ -254,14 +280,14 @@ class DefaultErrorHandler(ErrorHandler):
         self,
         default_return: Any = None,
         log_errors: bool = True,
-        successor: Optional[ErrorHandler] = None,
+        successor: ErrorHandler = NO_ERROR_HANDLER,
     ):
-        super().__init__(successor)  # Pass successor to parent
+        super().__init__(successor)
         self._default_return = default_return
         self._log_errors = log_errors
 
     def can_handle(self, error: Exception, context: ExecutionContext) -> bool:
-        return True  # Handles all errors as terminal handler
+        return True  # Handles all errors as catch-all handler
 
     def handle(self, error: Exception, context: ExecutionContext) -> Any:
         """Handle any unhandled error."""
@@ -282,9 +308,9 @@ class ConditionalErrorHandler(ErrorHandler):
 
     def __init__(
         self,
-        condition_func: callable,
-        handler_func: callable,
-        successor: Optional[ErrorHandler] = None,
+        condition_func: Callable[[Exception, ExecutionContext], bool],
+        handler_func: Callable[[Exception, ExecutionContext], Any],
+        successor: ErrorHandler = NO_ERROR_HANDLER,
     ):
         super().__init__(successor)
         self._condition_func = condition_func
@@ -382,7 +408,11 @@ class ErrorHandlerBuilder:
         )
         return self
 
-    def add_conditional_handler(self, condition_func: callable, handler_func: callable):
+    def add_conditional_handler(
+        self,
+        condition_func: Callable[[Exception, ExecutionContext], bool],
+        handler_func: Callable[[Exception, ExecutionContext], Any],
+    ):
         """Add conditional error handler to chain."""
         self._handlers.append(
             (
@@ -410,20 +440,16 @@ class ErrorHandlerBuilder:
             return DefaultErrorHandler()
 
         # Build chain from last to first
-        handler_chain = None
+        handler_chain = NO_ERROR_HANDLER
 
         for name, handler_class, kwargs in reversed(self._handlers):
-            # For DefaultErrorHandler, don't pass successor (it should be terminal)
-            if name == "default":
-                kwargs["successor"] = None  # Always terminal
-            else:
-                kwargs["successor"] = handler_chain
+            kwargs["successor"] = handler_chain
             handler_chain = handler_class(**kwargs)
 
         return handler_chain
 
 
-# Convenience function for creating common error handler chains
+# Convenience functions for creating common error handler chains
 def create_standard_error_chain(default_return: Any = None) -> ErrorHandler:
     """Create a standard error handler chain for common use cases."""
     return (

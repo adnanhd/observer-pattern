@@ -24,6 +24,8 @@ from callpyback.observers.builtin import (
 )
 from callpyback.observers.callback import CallbackObserver
 
+from callpyback.management.error_handling import DefaultErrorHandler, ConditionalErrorHandler
+
 __version__ = "2.0.0"
 __author__ = "Adnan Harun Dogan"
 __email__ = "adnanharundogan@gmail.com"
@@ -52,4 +54,7 @@ __all__ = [
     "CallPyBackError",
     "StateTransitionError",
     "ObserverError",
+    # Error handling
+    "DefaultErrorHandler",
+    "ConditionalErrorHandler",
 ]
