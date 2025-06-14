@@ -1,11 +1,160 @@
 """Error handling implementations with Null Object pattern."""
 
+import json
 import logging
 from abc import ABC, abstractmethod
 
-from typing_compat import Any, Callable, Optional
+from typing_compat import Any, Callable, Dict, Optional
 
 from callpyback.core.context import ExecutionContext
+
+
+class ErrorLoggingConfig:
+    """Configuration for error handler logging."""
+
+    def __init__(
+        self,
+        include_arguments: bool = True,
+        max_arg_length: int = 200,
+        max_error_message_length: int = 150,
+        mask_sensitive_keys: bool = True,
+        sensitive_keys: Optional[set] = None,
+    ):
+        self.include_arguments = include_arguments
+        self.max_arg_length = max_arg_length
+        self.max_error_message_length = max_error_message_length
+        self.mask_sensitive_keys = mask_sensitive_keys
+        self.sensitive_keys = sensitive_keys or {
+            'password', 'token', 'secret', 'key', 'auth', 'credential',
+            'pass', 'pwd', 'api_key', 'access_token', 'refresh_token'
+        }
+
+
+# Global logging configuration
+_ERROR_LOG_CONFIG = ErrorLoggingConfig()
+logger = logging.getLogger(__name__)
+
+
+def configure_error_logging(**kwargs) -> None:
+    """Configure global error logging settings."""
+    global _ERROR_LOG_CONFIG
+    for key, value in kwargs.items():
+        if hasattr(_ERROR_LOG_CONFIG, key):
+            setattr(_ERROR_LOG_CONFIG, key, value)
+
+
+def _safe_serialize_arguments(arguments: Dict[str, Any], config: ErrorLoggingConfig) -> str:
+    """Safely serialize function arguments for logging."""
+    if not config.include_arguments:
+        return f"<{len(arguments)} arguments>"
+
+    if not arguments:
+        return "{}"
+
+    try:
+        # Create a copy to avoid modifying original
+        safe_args = {}
+        for key, value in arguments.items():
+            # Mask sensitive values
+            if config.mask_sensitive_keys and any(
+                sensitive in key.lower() for sensitive in config.sensitive_keys
+            ):
+                safe_args[key] = "***MASKED***"
+            else:
+                # Try to represent the value safely
+                try:
+                    # Test if value is JSON serializable
+                    json.dumps(value)
+                    safe_args[key] = value
+                except (TypeError, ValueError):
+                    # If not serializable, use string representation
+                    str_repr = str(value)
+                    if len(str_repr) > 50:
+                        safe_args[key] = f"<{type(value).__name__}: {str_repr[:47]}...>"
+                    else:
+                        safe_args[key] = f"<{type(value).__name__}: {str_repr}>"
+
+        # Serialize to JSON string
+        json_str = json.dumps(safe_args, default=str, ensure_ascii=False)
+
+        # Truncate if too long
+        if len(json_str) > config.max_arg_length:
+            truncated = json_str[:config.max_arg_length - 3] + "..."
+            return truncated
+
+        return json_str
+
+    except Exception as e:
+        # Fallback to basic representation
+        return f"<serialization_error: {e.__class__.__name__}>"
+
+
+def _truncate_error_message(error: Exception, config: ErrorLoggingConfig) -> str:
+    """Safely truncate error message."""
+    error_msg = str(error)
+    if len(error_msg) > config.max_error_message_length:
+        return error_msg[:config.max_error_message_length - 3] + "..."
+    return error_msg
+
+
+def structured_log_message(
+    prefix: str,
+    description: str,
+    context: ExecutionContext,
+    error: Optional[Exception] = None,
+    action: str = "",
+    extra_fields: Optional[Dict[str, Any]] = None,
+    config: Optional[ErrorLoggingConfig] = None,
+) -> str:
+    """
+    Create structured log message string for error handlers.
+
+    Args:
+        prefix: Action prefix in CAPS (e.g., "TIMEOUT ERROR HANDLED")
+        description: Human-readable description
+        context: Execution context
+        error: Exception that occurred (optional)
+        action: Action being taken
+        extra_fields: Additional fields to include
+        config: Logging configuration (uses global if None)
+
+    Returns:
+        Formatted log message string
+    """
+    config = config or _ERROR_LOG_CONFIG
+
+    # Build the log message components
+    components = [
+        f"{prefix} | {description}",
+        f"[Function: {context.function_signature.name}]",
+        f"[Module: {context.function_signature.module}]",
+    ]
+
+    # Add error information if provided
+    if error:
+        components.extend([
+            f"[Error Type: {error.__class__.__name__}]",
+            f"[Error Message: {_truncate_error_message(error, config)}]",
+        ])
+
+    # Add arguments
+    args_str = _safe_serialize_arguments(context.arguments, config)
+    components.append(f"[Arguments: {args_str}]")
+
+    # Add timestamp
+    components.append(f"[Timestamp: {context.timestamp:.2f}]")
+
+    # Add extra fields
+    if extra_fields:
+        for key, value in extra_fields.items():
+            components.append(f"[{key}: {value}]")
+
+    # Add action if provided
+    if action:
+        components.append(f"[Action: {action}]")
+
+    # Join all components and return
+    return " ".join(components)
 
 
 class ErrorHandler(ABC):
@@ -44,9 +193,14 @@ class NoErrorHandler(ErrorHandler):
 
     def handle(self, error: Exception, context: ExecutionContext) -> Any:
         """Re-raise the error since no handler could process it."""
-        logging.debug(
-            f"No handler found for {error.__class__.__name__} in "
-            f"{context.function_signature.name}. Re-raising error."
+        logger.debug(
+            structured_log_message(
+                prefix="ERROR CHAIN EXHAUSTED",
+                description="No handler found for error - chain processing complete",
+                context=context,
+                error=error,
+                action="Re-raising original error for caller handling"
+            )
         )
         raise error
 
@@ -75,9 +229,15 @@ class TimeoutErrorHandler(ErrorHandler):
 
     def handle(self, error: Exception, context: ExecutionContext) -> Any:
         """Handle timeout error and return default value."""
-        logging.warning(
-            f"Function {context.function_signature.name} timed out: {error}. "
-            f"Returning default value: {self._default_return}"
+        logger.warning(
+            structured_log_message(
+                prefix="TIMEOUT ERROR HANDLED",
+                description="Function execution exceeded time limit",
+                context=context,
+                error=error,
+                action=f"Returning default value: {self._default_return}",
+                extra_fields={"Default Return": self._default_return}
+            )
         )
         return self._default_return
 
@@ -93,9 +253,15 @@ class ValidationErrorHandler(ErrorHandler):
 
     def handle(self, error: Exception, context: ExecutionContext) -> Any:
         """Handle validation error by logging and re-raising."""
-        logging.error(
-            f"Validation error in {context.function_signature.name}: {error}. "
-            f"Arguments: {context.arguments}"
+        logger.error(
+            structured_log_message(
+                prefix="VALIDATION ERROR DETECTED",
+                description="Programming error requires immediate attention",
+                context=context,
+                error=error,
+                action="Re-raising for developer attention",
+                extra_fields={"Severity": "High - Programming Error"}
+            )
         )
         # Re-raise validation errors as they indicate programming errors
         raise error
@@ -119,10 +285,38 @@ class FlexibleValidationErrorHandler(ErrorHandler):
 
     def handle(self, error: Exception, context: ExecutionContext) -> Any:
         """Handle validation error based on configuration."""
-        logging.error(
-            f"Validation error in {context.function_signature.name}: {error}. "
-            f"Arguments: {context.arguments}"
-        )
+        action = "Re-raising error" if self._reraise_validation_errors else "Returning default value"
+
+        if self._reraise_validation_errors:
+            logger.error(
+                structured_log_message(
+                    prefix="FLEXIBLE VALIDATION ERROR",
+                    description="Configurable validation error handling applied",
+                    context=context,
+                    error=error,
+                    action=action,
+                    extra_fields={
+                        "Reraise Config": self._reraise_validation_errors,
+                        "Default Return": self._default_return,
+                        "Handler Mode": "Strict"
+                    }
+                )
+            )
+        else:
+            logger.warning(
+                structured_log_message(
+                    prefix="FLEXIBLE VALIDATION ERROR",
+                    description="Configurable validation error handling applied",
+                    context=context,
+                    error=error,
+                    action=action,
+                    extra_fields={
+                        "Reraise Config": self._reraise_validation_errors,
+                        "Default Return": self._default_return,
+                        "Handler Mode": "Graceful"
+                    }
+                )
+            )
 
         if self._reraise_validation_errors:
             # Re-raise validation errors as they indicate programming errors
@@ -162,16 +356,34 @@ class NetworkErrorHandler(ErrorHandler):
 
     def handle(self, error: Exception, context: ExecutionContext) -> Any:
         """Handle network error with optional retry logic."""
-        logging.warning(
-            f"Network error in {context.function_signature.name}: {error}. "
-            f"Retry count: {self._retry_count}"
+        logger.warning(
+            structured_log_message(
+                prefix="NETWORK ERROR HANDLED",
+                description="Connection or network-related failure occurred",
+                context=context,
+                error=error,
+                action=f"Returning default value after {self._retry_count} retry attempts",
+                extra_fields={
+                    "Retry Count": self._retry_count,
+                    "Default Return": self._default_return,
+                    "Error Category": "Network/Connection"
+                }
+            )
         )
 
         # In a real implementation, you might implement retry logic here
         if self._retry_count > 0:
-            logging.info(
-                f"Retrying {context.function_signature.name} "
-                f"({self._retry_count} retries remaining)"
+            logger.info(
+                structured_log_message(
+                    prefix="NETWORK RETRY ATTEMPT",
+                    description="Attempting retry for network failure",
+                    context=context,
+                    action=f"Will retry {self._retry_count} more times before returning default",
+                    extra_fields={
+                        "Retries Remaining": self._retry_count,
+                        "Retry Strategy": "Exponential backoff recommended"
+                    }
+                )
             )
             # Note: Actual retry implementation would require access to the original function
             # This is simplified for demonstration
@@ -208,26 +420,47 @@ class BusinessLogicErrorHandler(ErrorHandler):
 
         if error_type in self._error_mapping:
             result = self._error_mapping[error_type]
-            logging.info(
-                f"Business logic error in {context.function_signature.name}: {error}. "
-                f"Mapped to result: {result}"
+            logger.info(
+                structured_log_message(
+                    prefix="BUSINESS LOGIC ERROR MAPPED",
+                    description="Custom error mapping successfully applied",
+                    context=context,
+                    error=error,
+                    action=f"Returning mapped result: {result}",
+                    extra_fields={
+                        "Mapped Result": result,
+                        "Mapping Strategy": "Custom error type mapping",
+                        "Available Mappings": len(self._error_mapping)
+                    }
+                )
             )
             return result
 
         # Default business logic error handling
-        logging.error(
-            f"Business rule violation in {context.function_signature.name}: {error}. "
-            f"Context: {context.arguments}"
-        )
-
-        # Return structured error information
-        return {
+        structured_error_response = {
             "error": True,
             "error_type": "business_logic",
             "message": str(error),
             "function": context.function_signature.name,
             "context": context.arguments,
         }
+
+        logger.error(
+            structured_log_message(
+                prefix="BUSINESS RULE VIOLATION",
+                description="Business logic constraint failed - no mapping available",
+                context=context,
+                error=error,
+                action="Returning structured error response",
+                extra_fields={
+                    "Response Type": "Structured Error Object",
+                    "Contains Context": True,
+                    "Error Category": "Business Logic"
+                }
+            )
+        )
+
+        return structured_error_response
 
 
 class SecurityErrorHandler(ErrorHandler):
@@ -258,10 +491,39 @@ class SecurityErrorHandler(ErrorHandler):
 
     def handle(self, error: Exception, context: ExecutionContext) -> Any:
         """Handle security error with audit logging."""
-        # Log security incident for audit
+        incident_id = f"{context.function_signature.name}_{int(context.timestamp)}"
+
+        # Log security incident for audit (use structured logging for audit logger too)
         self._audit_logger.critical(
-            f"SECURITY INCIDENT: {error} in {context.function_signature.name}. "
-            f"Arguments: {context.arguments}. Timestamp: {context.timestamp}"
+            structured_log_message(
+                prefix="SECURITY INCIDENT DETECTED",
+                description="Potential security violation requires immediate attention",
+                context=context,
+                error=error,
+                action="Access denied - incident logged for security review",
+                extra_fields={
+                    "Incident ID": incident_id,
+                    "Severity": "CRITICAL",
+                    "Requires Review": True,
+                    "Access Denied": True
+                }
+            )
+        )
+
+        # Additional warning in main logger
+        logger.warning(
+            structured_log_message(
+                prefix="SECURITY ERROR HANDLED",
+                description="Security-related error processed and logged",
+                context=context,
+                error=error,
+                action="Returning generic access denied response",
+                extra_fields={
+                    "Incident ID": incident_id,
+                    "Audit Logged": True,
+                    "Response Type": "Generic denial (no sensitive info)"
+                }
+            )
         )
 
         # Don't return sensitive information
@@ -269,7 +531,7 @@ class SecurityErrorHandler(ErrorHandler):
             "error": True,
             "error_type": "security",
             "message": "Access denied",
-            "incident_id": f"{context.function_signature.name}_{context.timestamp}",
+            "incident_id": incident_id,
         }
 
 
@@ -292,12 +554,24 @@ class DefaultErrorHandler(ErrorHandler):
     def handle(self, error: Exception, context: ExecutionContext) -> Any:
         """Handle any unhandled error."""
         if self._log_errors:
-            logging.error(
-                f"Unhandled error in {context.function_signature.name}: "
-                f"{error.__class__.__name__}: {error}. "
-                f"Arguments: {context.arguments}. "
-                f"Returning default: {self._default_return}",
-                exc_info=True,
+            logger.error(
+                structured_log_message(
+                    prefix="DEFAULT ERROR HANDLER",
+                    description="Unhandled error caught by fallback handler",
+                    context=context,
+                    error=error,
+                    action=f"Returning configured default value: {self._default_return}",
+                    extra_fields={
+                        "Handler Type": "Fallback/Catch-all",
+                        "Default Return": self._default_return,
+                        "Stack Trace Available": True
+                    }
+                )
+            )
+            # Add stack trace in a separate log entry for clarity
+            logger.error(
+                f"STACK TRACE for {context.function_signature.name} | {error.__class__.__name__}: {str(error)}",
+                exc_info=True
             )
 
         return self._default_return
@@ -321,15 +595,55 @@ class ConditionalErrorHandler(ErrorHandler):
         try:
             return self._condition_func(error, context)
         except Exception as e:
-            logging.warning(f"Error in condition function: {e}")
+            logger.warning(
+                structured_log_message(
+                    prefix="CONDITIONAL HANDLER ERROR",
+                    description="Condition function failed during evaluation",
+                    context=context,
+                    error=e,  # Log the condition error, not the original error
+                    action="Skipping conditional handler due to condition failure",
+                    extra_fields={
+                        "Original Error": error.__class__.__name__,
+                        "Condition Function": getattr(self._condition_func, '__name__', 'anonymous'),
+                        "Handler Skipped": True
+                    }
+                )
+            )
             return False
 
     def handle(self, error: Exception, context: ExecutionContext) -> Any:
         """Handle error using custom handler function."""
         try:
+            logger.info(
+                structured_log_message(
+                    prefix="CONDITIONAL HANDLER TRIGGERED",
+                    description="Custom condition met - applying specialized handler",
+                    context=context,
+                    error=error,
+                    action="Executing custom handler logic",
+                    extra_fields={
+                        "Condition Function": getattr(self._condition_func, '__name__', 'anonymous'),
+                        "Handler Function": getattr(self._handler_func, '__name__', 'anonymous'),
+                        "Handler Type": "Custom conditional"
+                    }
+                )
+            )
             return self._handler_func(error, context)
-        except Exception as e:
-            logging.error(f"Error in custom handler function: {e}")
+        except Exception as handler_error:
+            logger.error(
+                structured_log_message(
+                    prefix="CONDITIONAL HANDLER FAILED",
+                    description="Custom handler function encountered an error",
+                    context=context,
+                    error=handler_error,  # Log the handler error
+                    action="Re-raising original error due to handler failure",
+                    extra_fields={
+                        "Original Error": f"{error.__class__.__name__}: {str(error)[:50]}",
+                        "Handler Function": getattr(self._handler_func, '__name__', 'anonymous'),
+                        "Fallback Action": "Re-raise original"
+                    }
+                )
+            )
             raise error  # Re-raise original error if handler fails
 
 
@@ -512,3 +826,34 @@ def create_robust_error_chain(
         .add_default_handler(default_return)
         .build()
     )
+
+
+# Example usage of logging configuration
+def example_error_logging_setup():
+    """Example of how to configure error logging for different environments."""
+
+    # Development environment - detailed logging
+    configure_error_logging(
+        include_arguments=True,
+        max_arg_length=300,
+        max_error_message_length=200,
+        mask_sensitive_keys=True,
+        sensitive_keys={'password', 'token', 'secret', 'api_key'}
+    )
+
+    # Production environment - more restricted logging
+    # configure_error_logging(
+    #     include_arguments=False,  # Don't log arguments in production
+    #     max_arg_length=100,
+    #     max_error_message_length=100,
+    #     mask_sensitive_keys=True,
+    #     sensitive_keys={'password', 'token', 'secret', 'api_key', 'user_data'}
+    # )
+
+    # Example log output with detailed arguments:
+    # ERROR - VALIDATION ERROR DETECTED | Programming error requires immediate attention
+    # [Function: calculate_score] [Module: myapp.services] [Error Type: ValueError]
+    # [Error Message: Score must be between 0 and 100]
+    # [Arguments: {"user_id": 12345, "score": 150, "game_type": "puzzle"}]
+    # [Timestamp: 1672531200.45] [Severity: High - Programming Error]
+    # [Action: Re-raising for developer attention]
