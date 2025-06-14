@@ -1,38 +1,39 @@
 """Comprehensive pytest unit tests for CallPyBack observer pattern."""
 
-import pytest
 import logging
 import threading
 import time
-from unittest.mock import Mock, MagicMock, patch, call
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import MagicMock, Mock, call, patch
+
+import pytest
 
 from callpyback.core.context import (
     ExecutionContext,
-    ExecutionResult,
     ExecutionFailure,
+    ExecutionResult,
     FunctionSignature,
 )
-from callpyback.core.state_machine import ExecutionState, ExecutionPhase
-from callpyback.observers.base import BaseObserver
-from callpyback.observers.callback import CallbackObserver
-from callpyback.observers.builtin import (
-    LoggingObserver,
-    MetricsObserver,
-    TimingObserver,
+from callpyback.core.state_machine import ExecutionPhase, ExecutionState
+from callpyback.errors import ConfigurationError, ObserverError
+from callpyback.factories import (
+    create_callback_observer,
+    on_call,
+    on_completion,
+    on_failure,
+    on_success,
 )
 from callpyback.management.observer_manager import (
     ConcurrentObserverManager,
     ErrorIsolatingObserverManager,
 )
-from callpyback.factories import (
-    on_call,
-    on_success,
-    on_failure,
-    on_completion,
-    create_callback_observer,
+from callpyback.observers.base import BaseObserver
+from callpyback.observers.builtin import (
+    LoggingObserver,
+    MetricsObserver,
+    TimingObserver,
 )
-from callpyback.errors import ConfigurationError, ObserverError
+from callpyback.observers.callback import CallbackObserver
 from callpyback.protocols import Observer
 
 

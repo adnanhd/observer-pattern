@@ -1,41 +1,42 @@
 """Tests to increase coverage for remaining modules."""
 
-import pytest
 import gc
 import weakref
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 from callpyback.core.context import (
     ExecutionContext,
-    ExecutionResult,
     ExecutionFailure,
+    ExecutionResult,
     FunctionSignature,
 )
-from callpyback.core.state_machine import ExecutionState, ExecutionPhase, StateMachine
+from callpyback.core.state_machine import ExecutionPhase, ExecutionState, StateMachine
+from callpyback.core.time_sources import MockTimeSource, SystemTimeSource
 from callpyback.core.variable_extraction import (
-    TracingVariableExtractor,
     NoOpVariableExtractor,
     NullVariable,
+    TracingVariableExtractor,
 )
-from callpyback.core.time_sources import SystemTimeSource, MockTimeSource
+from callpyback.errors import StateTransitionError
+from callpyback.management.observer_manager import (
+    ConcurrentObserverManager,
+    ErrorIsolatingObserverManager,
+)
 from callpyback.observers.base import BaseObserver
 from callpyback.observers.builtin import (
     LoggingObserver,
     MetricsObserver,
     TimingObserver,
 )
-from callpyback.management.observer_manager import (
-    ConcurrentObserverManager,
-    ErrorIsolatingObserverManager,
-)
 from callpyback.protocols import (
-    Observer,
-    VariableExtractor,
-    TimeSource,
-    ObserverManager,
     ErrorHandler,
+    Observer,
+    ObserverManager,
+    TimeSource,
+    VariableExtractor,
 )
-from callpyback.errors import StateTransitionError
 
 
 class TestExecutionContext:

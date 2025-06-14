@@ -1,22 +1,24 @@
 """Tests to increase coverage for core decorator module."""
 
-import pytest
-import time
 import threading
-from unittest.mock import Mock, patch, MagicMock
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from unittest.mock import MagicMock, Mock, patch
 
-from callpyback.core.decorator import CallPyBack
+import pytest
+
 from callpyback.core.context import ExecutionContext, FunctionSignature
+from callpyback.core.decorator import CallPyBack
 from callpyback.core.state_machine import ExecutionState
 from callpyback.core.time_sources import MockTimeSource, SystemTimeSource
 from callpyback.core.variable_extraction import (
-    TracingVariableExtractor,
     NoOpVariableExtractor,
+    TracingVariableExtractor,
 )
-from callpyback.observers.callback import CallbackObserver
 from callpyback.errors import ConfigurationError
-from callpyback.factories import on_call, on_success, on_failure
+from callpyback.factories import on_call, on_failure, on_success
+from callpyback.observers.callback import CallbackObserver
 
 
 class TestCallPyBackConfiguration:

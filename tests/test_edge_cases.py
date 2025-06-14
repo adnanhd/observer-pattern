@@ -1,28 +1,29 @@
 """Edge cases and advanced scenarios for CallPyBack observer pattern."""
 
-import pytest
 import gc
 import threading
 import time
 import weakref
-from unittest.mock import Mock, patch, MagicMock
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 from callpyback.core.context import (
     ExecutionContext,
-    ExecutionResult,
     ExecutionFailure,
+    ExecutionResult,
     FunctionSignature,
 )
 from callpyback.core.state_machine import ExecutionState, StateMachine
-from callpyback.observers.base import BaseObserver
-from callpyback.observers.callback import CallbackObserver
-from callpyback.observers.builtin import MetricsObserver, TimingObserver
+from callpyback.errors import ConfigurationError
 from callpyback.management.observer_manager import (
     ConcurrentObserverManager,
     ErrorIsolatingObserverManager,
 )
-from callpyback.errors import ConfigurationError
+from callpyback.observers.base import BaseObserver
+from callpyback.observers.builtin import MetricsObserver, TimingObserver
+from callpyback.observers.callback import CallbackObserver
 from callpyback.protocols import Observer
 
 

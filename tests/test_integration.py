@@ -1,18 +1,19 @@
 """Fixed integration tests for CallPyBack."""
 
-import pytest
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from callpyback.core.decorator import CallPyBack
+from callpyback.core.state_machine import ExecutionState
+from callpyback.factories import on_call, on_completion, on_failure, on_success
 from callpyback.observers.builtin import (
     LoggingObserver,
     MetricsObserver,
     TimingObserver,
 )
-from callpyback.factories import on_call, on_success, on_failure, on_completion
-from callpyback.core.state_machine import ExecutionState
 
 
 class TestIntegration:

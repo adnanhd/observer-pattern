@@ -1,17 +1,18 @@
 """Fixed basic tests for CallPyBack functionality."""
 
-import pytest
 from unittest.mock import Mock
 
-from callpyback.core.decorator import CallPyBack
+import pytest
+
 from callpyback.core.context import ExecutionContext, ExecutionResult, FunctionSignature
+from callpyback.core.decorator import CallPyBack
 from callpyback.core.state_machine import ExecutionState, StateMachine
-from callpyback.factories import on_call, on_success, on_failure, on_completion
-from callpyback.observers.callback import CallbackObserver
-from callpyback.management.observer_manager import ConcurrentObserverManager
 from callpyback.core.time_sources import MockTimeSource
+from callpyback.errors import ConfigurationError, StateTransitionError
+from callpyback.factories import on_call, on_completion, on_failure, on_success
+from callpyback.management.observer_manager import ConcurrentObserverManager
 from callpyback.observers.builtin import MetricsObserver
-from callpyback.errors import StateTransitionError, ConfigurationError
+from callpyback.observers.callback import CallbackObserver
 
 
 class TestCallPyBackBasics:
