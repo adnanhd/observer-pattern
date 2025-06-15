@@ -50,6 +50,7 @@ class CallPyBack:
         max_observer_failures: int = 5,
         time_source: Optional[TimeSource] = None,
         variable_extractor: Optional[VariableExtractor] = None,
+        error_handler: Optional[Callable[[Exception], None]] = None,
     ):
         """
         Initialize CallPyBack decorator.
@@ -64,6 +65,7 @@ class CallPyBack:
             max_observer_failures: Max failures before disabling observer
             time_source: Time source for timestamps (defaults to system time)
             variable_extractor: Variable extraction strategy
+            error_handler: Error handler for exceptions
         """
         # Dependency injection for testability
         self._time_source = time_source or SystemTimeSource()
@@ -84,7 +86,14 @@ class CallPyBack:
         )
 
         # Error handling chain
-        self._error_handler = self._build_error_handler_chain()
+        if error_handler is None:
+            error_handler = self._build_error_handler_chain()
+        elif not isinstance(error_handler, ErrorHandler):
+            raise ConfigurationError(
+                "error_handler must be an instance of ErrorHandler"
+            )
+
+        self._error_handler = error_handler
 
         # Register initial observers
         for observer in observers or []:

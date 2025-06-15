@@ -21,9 +21,9 @@ __author__ = "CallPyBack Contributors"
 
 __all__ = [
     "MessageQueue",
-    "EventBus", 
+    "EventBus",
     "TopicRegistry",
     "ThreadExecutor",
-    "ProcessExecutor", 
+    "ProcessExecutor",
     "HybridExecutor",
 ]
