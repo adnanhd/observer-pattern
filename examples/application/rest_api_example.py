@@ -1,353 +1,366 @@
 #!/usr/bin/env python3
 """
-REST API Monitoring Example
-Demonstrates monitoring REST API endpoints with CallPyBack for:
-- Request/response logging
-- Performance tracking
-- Error rate monitoring
-- Rate limiting detection
+Uses existing CallPyBack plugins: EventBus, ThreadExecutor
 """
 
 import json
 import random
 import time
-from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
-from callpyback import (
-    CallPyBack,
-    DefaultErrorHandler,
-    ExecutionContext,
-    ExecutionState,
-    on_call,
-    on_completion,
-    on_failure,
-    on_success,
-)
+from callpyback import CallPyBack, on_call, on_failure, on_success
 from callpyback.observers.base import BaseObserver
+from callpyback.plugins.core.message_queue import EventBus
+from callpyback.plugins.executors.thread_executor import ThreadExecutor
+
+
+class HTTPMethod(Enum):
+    GET = "GET"
+    POST = "POST"
+    PUT = "PUT"
+    DELETE = "DELETE"
+    PATCH = "PATCH"
 
 
 @dataclass
 class APIRequest:
-    method: str
+    method: HTTPMethod
     endpoint: str
     headers: Dict[str, str]
     body: Optional[str] = None
+    query_params: Optional[Dict[str, str]] = None
     user_id: Optional[str] = None
 
 
-class APIMonitoringObserver(BaseObserver):
-    """Comprehensive API monitoring observer"""
+@dataclass
+class APIResponse:
+    status_code: int
+    data: Any = None
+    headers: Dict[str, str] = None
+    error: Optional[str] = None
+
+
+class APIMetricsObserver(BaseObserver):
+    """API metrics and monitoring"""
 
     def __init__(self):
-        super().__init__(priority=90, name="APIMonitoring")
-        self.request_stats = defaultdict(
-            lambda: {
-                "count": 0,
-                "total_time": 0,
-                "errors": 0,
-                "status_codes": defaultdict(int),
-            }
-        )
-        self.recent_requests = deque(maxlen=100)  # Keep last 100 requests
-        self.error_patterns = defaultdict(int)
+        super().__init__(priority=90, name="APIMetrics")
+        self.endpoint_stats = {}
+        self.status_codes = {200: 0, 400: 0, 404: 0, 500: 0}
+        self.total_requests = 0
+        self.total_response_time = 0.0
+        self.errors = 0
 
-    def update(self, context: ExecutionContext) -> None:
-        if context.state != ExecutionState.COMPLETED:
-            return
+    def update(self, context):
+        if context.state.name == "COMPLETED":
+            self.total_requests += 1
 
-        # Extract API details
-        request = context.arguments.get("request")
-        if not request:
-            return
+            if context.result and context.result.value:
+                result = context.result.value
+                endpoint = result.get("endpoint", "unknown")
+                response_time = result.get("response_time", 0)
+                status_code = result.get("status_code", 500)
 
-        endpoint = request.endpoint
-        method = request.method
-        key = f"{method} {endpoint}"
+                # Track endpoint stats
+                if endpoint not in self.endpoint_stats:
+                    self.endpoint_stats[endpoint] = {
+                        "requests": 0,
+                        "total_time": 0.0,
+                        "errors": 0,
+                    }
 
-        # Update stats
-        stats = self.request_stats[key]
-        stats["count"] += 1
+                self.endpoint_stats[endpoint]["requests"] += 1
+                self.endpoint_stats[endpoint]["total_time"] += response_time
 
-        if context.result:
-            execution_time = getattr(context.result, "execution_time", 0)
-            stats["total_time"] += execution_time
+                # Track status codes
+                if status_code in self.status_codes:
+                    self.status_codes[status_code] += 1
 
-            # Track status codes and errors
-            response = getattr(context.result, "value", {})
-            if isinstance(response, dict):
-                status_code = response.get("status_code", 200)
-                stats["status_codes"][status_code] += 1
-
+                # Track errors
                 if status_code >= 400:
-                    stats["errors"] += 1
-                    error_type = response.get("error_type", "unknown")
-                    self.error_patterns[f"{endpoint}:{error_type}"] += 1
+                    self.endpoint_stats[endpoint]["errors"] += 1
+                    self.errors += 1
 
-        # Track recent requests for analysis
-        self.recent_requests.append(
-            {
-                "timestamp": context.timestamp,
-                "endpoint": endpoint,
-                "method": method,
-                "user_id": request.user_id,
-                "execution_time": getattr(context.result, "execution_time", 0),
-                "success": context.is_successful,
-            }
-        )
+                self.total_response_time += response_time
 
-    def get_endpoint_report(self):
-        """Generate endpoint performance report"""
-        report = {}
-        for endpoint, stats in self.request_stats.items():
-            avg_time = stats["total_time"] / stats["count"] if stats["count"] > 0 else 0
-            error_rate = (
-                (stats["errors"] / stats["count"]) * 100 if stats["count"] > 0 else 0
+        elif context.state.name == "FAILED":
+            self.errors += 1
+
+
+# Global instances
+api_observer = APIMetricsObserver()
+event_bus = EventBus()
+thread_executor = ThreadExecutor(max_workers=6)
+
+
+# Mock API handlers
+class MockAPIHandlers:
+    """Mock REST API endpoint handlers"""
+
+    @staticmethod
+    def handle_users(request: APIRequest) -> APIResponse:
+        """Handle /api/users endpoints"""
+
+        if request.method == HTTPMethod.GET:
+            if request.endpoint == "/api/users":
+                # List users
+                users = [
+                    {"id": i, "name": f"User {i}", "email": f"user{i}@example.com"}
+                    for i in range(1, 6)
+                ]
+                return APIResponse(200, {"users": users, "total": len(users)})
+
+            elif "/api/users/" in request.endpoint:
+                # Get specific user
+                user_id = request.endpoint.split("/")[-1]
+                if user_id == "999":  # Simulate not found
+                    return APIResponse(404, error="User not found")
+
+                return APIResponse(
+                    200,
+                    {
+                        "id": user_id,
+                        "name": f"User {user_id}",
+                        "email": f"user{user_id}@example.com",
+                        "created_at": time.time(),
+                    },
+                )
+
+        elif request.method == HTTPMethod.POST:
+            # Create user
+            if not request.body:
+                return APIResponse(400, error="Request body required")
+
+            try:
+                data = json.loads(request.body)
+                if "email" not in data:
+                    return APIResponse(400, error="Email is required")
+
+                return APIResponse(
+                    201,
+                    {
+                        "id": random.randint(100, 999),
+                        "message": "User created successfully",
+                        "email": data["email"],
+                    },
+                )
+            except json.JSONDecodeError:
+                return APIResponse(400, error="Invalid JSON")
+
+        elif request.method == HTTPMethod.PUT and "/api/users/" in request.endpoint:
+            # Update user
+            user_id = request.endpoint.split("/")[-1]
+            return APIResponse(
+                200,
+                {
+                    "id": user_id,
+                    "message": "User updated successfully",
+                    "updated_at": time.time(),
+                },
             )
 
-            report[endpoint] = {
-                "requests": stats["count"],
-                "avg_response_time": f"{avg_time:.3f}s",
-                "error_rate": f"{error_rate:.1f}%",
-                "status_codes": dict(stats["status_codes"]),
-            }
-        return report
+        elif request.method == HTTPMethod.DELETE and "/api/users/" in request.endpoint:
+            # Delete user
+            user_id = request.endpoint.split("/")[-1]
+            return APIResponse(200, {"message": f"User {user_id} deleted successfully"})
 
-    def get_error_analysis(self):
-        """Analyze error patterns"""
-        return dict(self.error_patterns)
+        return APIResponse(405, error="Method not allowed")
 
+    @staticmethod
+    def handle_products(request: APIRequest) -> APIResponse:
+        """Handle /api/products endpoints"""
 
-class RateLimitingObserver(BaseObserver):
-    """Monitor for rate limiting and unusual patterns"""
+        # Simulate occasional database timeout
+        if random.random() < 0.1:
+            return APIResponse(500, error="Database connection timeout")
 
-    def __init__(self, window_size=60):
-        super().__init__(priority=80, name="RateLimiting")
-        self.window_size = window_size
-        self.user_requests = defaultdict(lambda: deque())
-        self.alerts = []
+        if request.method == HTTPMethod.GET:
+            products = [
+                {"id": i, "name": f"Product {i}", "price": random.uniform(10, 100)}
+                for i in range(1, 11)
+            ]
+            return APIResponse(200, {"products": products, "total": len(products)})
 
-    def update(self, context: ExecutionContext) -> None:
-        if context.state != ExecutionState.COMPLETED:
-            return
-
-        request = context.arguments.get("request")
-        if not request or not request.user_id:
-            return
-
-        current_time = time.time()
-        user_id = request.user_id
-
-        # Add current request
-        self.user_requests[user_id].append(current_time)
-
-        # Remove old requests outside window
-        cutoff_time = current_time - self.window_size
-        while (
-            self.user_requests[user_id] and self.user_requests[user_id][0] < cutoff_time
-        ):
-            self.user_requests[user_id].popleft()
-
-        # Check for rate limiting
-        request_count = len(self.user_requests[user_id])
-        if request_count > 100:  # More than 100 requests per minute
-            alert = {
-                "timestamp": current_time,
-                "user_id": user_id,
-                "request_count": request_count,
-                "endpoint": request.endpoint,
-                "alert_type": "rate_limit_exceeded",
-            }
-            self.alerts.append(alert)
-            print(
-                f"🚨 Rate limit alert: User {user_id} made {request_count} requests in {self.window_size}s"
+        elif request.method == HTTPMethod.POST:
+            return APIResponse(
+                201,
+                {
+                    "id": random.randint(100, 999),
+                    "message": "Product created successfully",
+                },
             )
 
-    def get_active_users(self):
-        """Get currently active users"""
-        current_time = time.time()
-        cutoff_time = current_time - 300  # 5 minutes
+        return APIResponse(405, error="Method not allowed")
 
-        active_users = {}
-        for user_id, requests in self.user_requests.items():
-            recent_requests = [r for r in requests if r > cutoff_time]
-            if recent_requests:
-                active_users[user_id] = len(recent_requests)
+    @staticmethod
+    def handle_orders(request: APIRequest) -> APIResponse:
+        """Handle /api/orders endpoints"""
 
-        return active_users
+        if request.method == HTTPMethod.POST:
+            # Simulate payment processing error
+            if random.random() < 0.15:
+                return APIResponse(402, error="Payment processing failed")
 
+            return APIResponse(
+                201,
+                {
+                    "order_id": f"ORD-{random.randint(1000, 9999)}",
+                    "status": "created",
+                    "total": random.uniform(50, 500),
+                },
+            )
 
-# Set up monitoring
-api_monitor = APIMonitoringObserver()
-rate_limiter = RateLimitingObserver()
+        elif request.method == HTTPMethod.GET:
+            orders = [
+                {
+                    "id": f"ORD-{i}",
+                    "status": random.choice(["pending", "completed", "cancelled"]),
+                }
+                for i in range(1000, 1005)
+            ]
+            return APIResponse(200, {"orders": orders})
 
-# Error handler for API failures
-api_error_handler = DefaultErrorHandler(
-    default_return={
-        "status_code": 500,
-        "error": "Internal server error",
-        "error_type": "server_error",
-    }
-)
+        return APIResponse(405, error="Method not allowed")
 
 
 @CallPyBack(
     observers=[
-        api_monitor,
-        rate_limiter,
+        api_observer,
         on_call(
             lambda context: print(
-                f"📡 API Call: {context.arguments['request'].method} {context.arguments['request'].endpoint}"
+                f"🌐 {context.arguments['request'].method.value} {context.arguments['request'].endpoint}"
             )
         ),
-        on_failure(lambda result: print(f"❌ API Error: {result.exception}")),
-    ],
-    error_handler=api_error_handler,
-    exception_classes=(ConnectionError, TimeoutError, ValueError),
+        on_success(
+            lambda result: event_bus.publish("api.request.completed", result.value)
+        ),
+        on_failure(
+            lambda result: event_bus.publish(
+                "api.request.failed", {"error": str(result.exception)}
+            )
+        ),
+    ]
 )
 def handle_api_request(request: APIRequest) -> Dict[str, Any]:
-    """Simulate handling an API request"""
+    """Handle API request with monitoring"""
 
-    # Simulate processing time
-    processing_time = random.uniform(0.01, 0.5)
-    time.sleep(processing_time)
+    start_time = time.time()
 
-    # Simulate various response scenarios
+    try:
+        # Route request to appropriate handler
+        if request.endpoint.startswith("/api/users"):
+            response = MockAPIHandlers.handle_users(request)
+        elif request.endpoint.startswith("/api/products"):
+            response = MockAPIHandlers.handle_products(request)
+        elif request.endpoint.startswith("/api/orders"):
+            response = MockAPIHandlers.handle_orders(request)
+        else:
+            response = APIResponse(404, error="Endpoint not found")
 
-    # GET endpoints
-    if request.method == "GET":
-        if request.endpoint == "/api/users":
-            return {
-                "status_code": 200,
-                "data": [{"id": i, "name": f"User {i}"} for i in range(1, 6)],
-                "count": 5,
-            }
-        elif request.endpoint.startswith("/api/users/"):
-            user_id = request.endpoint.split("/")[-1]
-            if user_id == "999":  # Simulate not found
-                return {
-                    "status_code": 404,
-                    "error": "User not found",
-                    "error_type": "not_found",
-                }
-            return {
-                "status_code": 200,
-                "data": {"id": user_id, "name": f"User {user_id}"},
-            }
-        elif request.endpoint == "/api/products":
-            # Simulate occasional database timeout
-            if random.random() < 0.1:
-                raise ConnectionError("Database connection timeout")
-            return {
-                "status_code": 200,
-                "data": [{"id": i, "name": f"Product {i}"} for i in range(1, 11)],
-            }
+        # Simulate processing time
+        time.sleep(random.uniform(0.01, 0.1))
 
-    # POST endpoints
-    elif request.method == "POST":
-        if request.endpoint == "/api/users":
-            # Simulate validation error
-            if request.body and '"email"' not in request.body:
-                return {
-                    "status_code": 400,
-                    "error": "Email is required",
-                    "error_type": "validation_error",
-                }
-            return {
-                "status_code": 201,
-                "data": {"id": random.randint(100, 999), "message": "User created"},
-            }
-        elif request.endpoint == "/api/orders":
-            # Simulate payment processing error
-            if random.random() < 0.15:
-                return {
-                    "status_code": 402,
-                    "error": "Payment processing failed",
-                    "error_type": "payment_error",
-                }
-            return {
-                "status_code": 201,
-                "data": {"order_id": f"ORD-{random.randint(1000, 9999)}"},
-            }
+        response_time = time.time() - start_time
 
-    # PUT/PATCH endpoints
-    elif request.method in ["PUT", "PATCH"]:
-        if request.endpoint.startswith("/api/users/"):
-            # Simulate authorization error
-            if not request.headers.get("Authorization"):
-                return {
-                    "status_code": 401,
-                    "error": "Authorization required",
-                    "error_type": "auth_error",
-                }
-            return {"status_code": 200, "data": {"message": "User updated"}}
+        return {
+            "method": request.method.value,
+            "endpoint": request.endpoint,
+            "status_code": response.status_code,
+            "response_time": response_time,
+            "response_data": response.data,
+            "error": response.error,
+            "user_id": request.user_id,
+            "status": "completed",
+        }
 
-    # DELETE endpoints
-    elif request.method == "DELETE":
-        if request.endpoint.startswith("/api/users/"):
-            # Simulate forbidden error
-            if random.random() < 0.2:
-                return {
-                    "status_code": 403,
-                    "error": "Insufficient permissions",
-                    "error_type": "permission_error",
-                }
-            return {"status_code": 204, "message": "User deleted"}
-
-    # Default response
-    return {"status_code": 200, "data": {"message": "Request processed successfully"}}
+    except Exception as e:
+        response_time = time.time() - start_time
+        return {
+            "method": request.method.value,
+            "endpoint": request.endpoint,
+            "status_code": 500,
+            "response_time": response_time,
+            "error": str(e),
+            "status": "failed",
+        }
 
 
-def simulate_api_traffic():
-    """Simulate realistic API traffic patterns"""
+class SimpleAPIServer:
+    """Simplified API server using CallPyBack plugins"""
 
-    # Define realistic endpoint patterns
-    endpoints = [
-        ("GET", "/api/users", 0.3),
-        ("GET", "/api/users/123", 0.2),
-        ("GET", "/api/products", 0.15),
-        ("POST", "/api/users", 0.1),
-        ("POST", "/api/orders", 0.1),
-        ("PUT", "/api/users/123", 0.08),
-        ("DELETE", "/api/users/456", 0.05),
-        ("GET", "/api/users/999", 0.02),  # Not found scenario
-    ]
+    def __init__(self):
+        self.event_bus = event_bus
+        self.executor = thread_executor
+        self.observer = api_observer
 
-    users = [f"user_{i}" for i in range(1, 21)]
+        # Start services
+        self.executor.start()
 
-    print("🚀 Starting API traffic simulation...")
-    print("=" * 50)
+        # Setup event handlers
+        self.event_bus.subscribe("api.request.completed", self._on_request_completed)
+        self.event_bus.subscribe("api.request.failed", self._on_request_failed)
 
-    # Simulate 50 API calls
-    for i in range(50):
-        # Select endpoint based on probability
-        rand = random.random()
-        cumulative = 0
-        for method, endpoint, probability in endpoints:
-            cumulative += probability
-            if rand <= cumulative:
-                break
+        # Rate limiting (simple in-memory)
+        self.rate_limits = {}
+        self.rate_limit_window = 60  # 1 minute
+        self.rate_limit_max = 100  # 100 requests per minute
 
-        # Create request
-        user_id = random.choice(users)
-        headers = {"User-Agent": "TestClient/1.0"}
+    def _on_request_completed(self, message):
+        """Handle completed API request"""
+        payload = message.payload
+        method = payload.get("method", "UNKNOWN")
+        endpoint = payload.get("endpoint", "unknown")
+        status_code = payload.get("status_code", 500)
+        response_time = payload.get("response_time", 0)
 
-        # Add auth header for some requests
-        if random.random() < 0.8:
-            headers["Authorization"] = f"Bearer token_{user_id}"
+        status_icon = "✅" if status_code < 400 else "❌"
+        print(
+            f"  {status_icon} {method} {endpoint}: {status_code} ({response_time:.3f}s)"
+        )
 
-        body = None
-        if method == "POST" and endpoint == "/api/users":
-            body = json.dumps(
-                {"name": f"New User {i}", "email": f"user{i}@example.com"}
-            )
-        elif method == "POST" and endpoint == "/api/orders":
-            body = json.dumps(
-                {"product_id": random.randint(1, 10), "quantity": random.randint(1, 5)}
-            )
+    def _on_request_failed(self, message):
+        """Handle failed API request"""
+        error = message.payload.get("error", "Unknown error")
+        print(f"  ❌ API request failed: {error}")
 
-        request = APIRequest(
+    def check_rate_limit(self, user_id: str) -> bool:
+        """Simple rate limiting check"""
+        current_time = time.time()
+
+        if user_id not in self.rate_limits:
+            self.rate_limits[user_id] = []
+
+        # Remove requests outside the window
+        self.rate_limits[user_id] = [
+            req_time
+            for req_time in self.rate_limits[user_id]
+            if current_time - req_time < self.rate_limit_window
+        ]
+
+        # Check if under limit
+        if len(self.rate_limits[user_id]) >= self.rate_limit_max:
+            return False
+
+        # Add current request
+        self.rate_limits[user_id].append(current_time)
+        return True
+
+    def create_request(
+        self, method: HTTPMethod, endpoint: str, body: str = None, user_id: str = None
+    ) -> APIRequest:
+        """Create API request object"""
+
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "SimpleAPIClient/1.0",
+        }
+
+        if user_id:
+            headers["X-User-ID"] = user_id
+
+        return APIRequest(
             method=method,
             endpoint=endpoint,
             headers=headers,
@@ -355,53 +368,175 @@ def simulate_api_traffic():
             user_id=user_id,
         )
 
-        try:
-            response = handle_api_request(request)
-            status = response.get("status_code", 200)
-            print(f"  {method} {endpoint} -> {status}")
-        except Exception as e:
-            print(f"  {method} {endpoint} -> ERROR: {e}")
+    def process_request(self, request: APIRequest) -> Dict[str, Any]:
+        """Process single API request"""
 
-        # Random delay between requests
-        time.sleep(random.uniform(0.01, 0.1))
+        # Check rate limiting
+        if request.user_id and not self.check_rate_limit(request.user_id):
+            return {
+                "method": request.method.value,
+                "endpoint": request.endpoint,
+                "status_code": 429,
+                "error": "Rate limit exceeded",
+                "status": "rate_limited",
+            }
 
-    print("\n" + "=" * 50)
-    print("📊 API TRAFFIC ANALYSIS")
-    print("=" * 50)
+        # Process request
+        return handle_api_request(request)
 
-    # Endpoint performance report
-    endpoint_report = api_monitor.get_endpoint_report()
-    print("\n🎯 Endpoint Performance:")
-    for endpoint, stats in endpoint_report.items():
-        print(f"  {endpoint}:")
-        print(f"    Requests: {stats['requests']}")
-        print(f"    Avg Response Time: {stats['avg_response_time']}")
-        print(f"    Error Rate: {stats['error_rate']}")
-        print(f"    Status Codes: {stats['status_codes']}")
+    def simulate_api_load(self, num_requests: int = 50) -> List[Dict[str, Any]]:
+        """Simulate API load with multiple concurrent requests"""
 
-    # Error analysis
-    error_analysis = api_monitor.get_error_analysis()
-    if error_analysis:
-        print(f"\n🔥 Error Patterns:")
-        for pattern, count in error_analysis.items():
-            print(f"  {pattern}: {count} occurrences")
+        print(f"🌐 Simulating API load with {num_requests} requests...")
 
-    # Active users
-    active_users = rate_limiter.get_active_users()
-    print(f"\n👥 Active Users (last 5 min): {len(active_users)}")
-    for user_id, request_count in sorted(
-        active_users.items(), key=lambda x: x[1], reverse=True
-    )[:10]:
-        print(f"  {user_id}: {request_count} requests")
+        # Create variety of requests
+        request_templates = [
+            (HTTPMethod.GET, "/api/users"),
+            (HTTPMethod.GET, "/api/users/123"),
+            (
+                HTTPMethod.POST,
+                "/api/users",
+                '{"name": "John", "email": "john@example.com"}',
+            ),
+            (HTTPMethod.GET, "/api/products"),
+            (HTTPMethod.POST, "/api/products", '{"name": "Product", "price": 29.99}'),
+            (HTTPMethod.POST, "/api/orders", '{"items": ["product1"], "total": 50.0}'),
+            (HTTPMethod.GET, "/api/users/999"),  # Not found
+        ]
 
-    # Rate limiting alerts
-    if rate_limiter.alerts:
-        print(f"\n🚨 Rate Limiting Alerts: {len(rate_limiter.alerts)}")
-        for alert in rate_limiter.alerts[-5:]:  # Show last 5 alerts
-            print(
-                f"  {alert['user_id']} exceeded limit with {alert['request_count']} requests"
+        # Submit requests to thread pool
+        results = []
+
+        from concurrent.futures import as_completed
+
+        with thread_executor.executor as executor:
+            # Submit all requests
+            futures = []
+            for i in range(num_requests):
+                template = random.choice(request_templates)
+                method, endpoint = template[0], template[1]
+                body = template[2] if len(template) > 2 else None
+                user_id = f"user_{random.randint(1, 10)}"
+
+                request = self.create_request(method, endpoint, body, user_id)
+                future = executor.submit(self.process_request, request)
+                futures.append(future)
+
+            # Collect results
+            for future in as_completed(futures, timeout=30):
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    results.append({"error": str(e), "status": "timeout"})
+
+        return results
+
+    def get_api_metrics(self) -> Dict[str, Any]:
+        """Get API performance metrics"""
+
+        # Calculate endpoint performance
+        endpoint_performance = {}
+        for endpoint, stats in self.observer.endpoint_stats.items():
+            if stats["requests"] > 0:
+                avg_response_time = stats["total_time"] / stats["requests"]
+                error_rate = stats["errors"] / stats["requests"]
+                endpoint_performance[endpoint] = {
+                    "requests": stats["requests"],
+                    "avg_response_time": avg_response_time,
+                    "error_rate": error_rate,
+                }
+
+        # Overall metrics
+        avg_response_time = (
+            self.observer.total_response_time / self.observer.total_requests
+            if self.observer.total_requests > 0
+            else 0
+        )
+
+        success_rate = (self.observer.total_requests - self.observer.errors) / max(
+            self.observer.total_requests, 1
+        )
+
+        return {
+            "total_requests": self.observer.total_requests,
+            "total_errors": self.observer.errors,
+            "success_rate": success_rate,
+            "avg_response_time": avg_response_time,
+            "status_code_distribution": self.observer.status_codes,
+            "endpoint_performance": endpoint_performance,
+            "active_rate_limits": len(self.rate_limits),
+        }
+
+    def shutdown(self):
+        """Clean shutdown"""
+        self.executor.stop()
+
+
+def main():
+    """Demo the simplified API server"""
+    api_server = SimpleAPIServer()
+
+    try:
+        # Test individual API calls
+        print("🌐 Testing individual API endpoints...")
+
+        test_requests = [
+            (HTTPMethod.GET, "/api/users"),
+            (
+                HTTPMethod.POST,
+                "/api/users",
+                '{"name": "Alice", "email": "alice@example.com"}',
+            ),
+            (HTTPMethod.GET, "/api/users/123"),
+            (HTTPMethod.GET, "/api/products"),
+            (HTTPMethod.POST, "/api/orders", '{"items": ["product1", "product2"]}'),
+            (HTTPMethod.GET, "/api/users/999"),  # Not found
+        ]
+
+        for method, endpoint, *body in test_requests:
+            request_body = body[0] if body else None
+            request = api_server.create_request(
+                method, endpoint, request_body, "test_user"
             )
+            result = api_server.process_request(request)
+
+            status_icon = "✅" if result.get("status_code", 500) < 400 else "❌"
+            print(
+                f"  {status_icon} {method.value} {endpoint}: {result.get('status_code')}"
+            )
+
+        # Simulate high load
+        print(f"\n⚡ Simulating high API load...")
+        load_results = api_server.simulate_api_load(30)
+
+        # Analyze results
+        status_codes = {}
+        for result in load_results:
+            code = result.get("status_code", 500)
+            status_codes[code] = status_codes.get(code, 0) + 1
+
+        print(f"📊 Load test results:")
+        for code, count in sorted(status_codes.items()):
+            print(f"  {code}: {count} requests")
+
+        # Show detailed metrics
+        metrics = api_server.get_api_metrics()
+        print(f"\n📈 API Performance Metrics:")
+        print(f"  Total requests: {metrics['total_requests']}")
+        print(f"  Success rate: {metrics['success_rate']:.1%}")
+        print(f"  Avg response time: {metrics['avg_response_time']:.3f}s")
+        print(f"  Total errors: {metrics['total_errors']}")
+
+        print(f"\n🎯 Top endpoints:")
+        for endpoint, perf in list(metrics["endpoint_performance"].items())[:3]:
+            print(
+                f"  {endpoint}: {perf['requests']} requests, {perf['avg_response_time']:.3f}s avg"
+            )
+
+    finally:
+        api_server.shutdown()
 
 
 if __name__ == "__main__":
-    simulate_api_traffic()
+    main()
