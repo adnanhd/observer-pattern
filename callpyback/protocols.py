@@ -1,12 +1,10 @@
 """Protocol definitions for CallPyBack interfaces."""
 
 from typing_compat import (
-    TYPE_CHECKING,
     Any,
     ContextManager,
     Dict,
     List,
-    Optional,
     Protocol,
     runtime_checkable,
 )

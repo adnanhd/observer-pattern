@@ -7,10 +7,9 @@ import re
 import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Pattern, Set, Union
+from typing import Any, Dict, List, Optional, Pattern, Set
 
-from callpyback import CallPyBack
-from callpyback.plugins.core.message_queue import Message, Subscription
+from callpyback.plugins.core.message_queue import Subscription
 
 
 @dataclass

@@ -3,15 +3,14 @@ Inter-Process Communication (IPC) plugin for CallPyBack.
 Provides communication between CallPyBack instances across processes.
 """
 
-import json
 import multiprocessing as mp
 import pickle
 import socket
 import struct
 import threading
 import time
-from dataclasses import asdict, dataclass
-from typing import Any, Callable, Dict, List, Optional, Union
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 try:
@@ -28,7 +27,6 @@ try:
 except ImportError:
     HAS_REDIS = False
 
-from callpyback import CallPyBack
 from callpyback.plugins.core.message_queue import Message, MessageQueue
 
 
@@ -240,7 +238,6 @@ class SocketTransport(IPCTransport):
     def _process_received_message(self, message: IPCMessage):
         """Process received IPC message."""
         # This will be overridden by the IPC manager
-        pass
 
 
 class ZMQTransport(IPCTransport):
@@ -686,7 +683,6 @@ class IPCManager:
     def _handle_control(self, message: IPCMessage):
         """Handle control message."""
         # Implement control message handling (ping, discovery, etc.)
-        pass
 
     def get_stats(self) -> Dict[str, Any]:
         """Get IPC statistics."""

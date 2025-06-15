@@ -3,23 +3,17 @@ Thread-based executor for parallel task execution.
 Provides thread pool management with CallPyBack integration.
 """
 
+import logging
 import queue
 import threading
-import logging
 import time
-from concurrent.futures import (
-    Future,
-    ThreadPoolExecutor,
-    as_completed,
-    wait as wait_for_futures,
-    ALL_COMPLETED,
-)
+from concurrent.futures import ALL_COMPLETED, Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import wait as wait_for_futures
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Union
 from uuid import uuid4
 
 from callpyback import CallPyBack
-from callpyback.plugins.core.message_queue import Message
 
 
 @dataclass

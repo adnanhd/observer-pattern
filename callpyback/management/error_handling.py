@@ -179,12 +179,10 @@ class ErrorHandler(ABC):
     @abstractmethod
     def can_handle(self, error: Exception, context: ExecutionContext) -> bool:
         """Check if this handler can handle the error."""
-        pass
 
     @abstractmethod
     def handle(self, error: Exception, context: ExecutionContext) -> Any:
         """Handle the error and return result."""
-        pass
 
     def handle_error(self, error: Exception, context: ExecutionContext) -> Any:
         """Handle error using chain of responsibility."""

@@ -10,8 +10,8 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from uuid import uuid4
 
 from callpyback import CallPyBack
-from callpyback.plugins.executors.thread_executor import ThreadExecutor, TaskResult
 from callpyback.plugins.executors.process_executor import ProcessExecutor, ProcessResult
+from callpyback.plugins.executors.thread_executor import TaskResult, ThreadExecutor
 
 
 @dataclass

@@ -10,19 +10,17 @@ import time
 from typing import Any, Dict, List, Optional, Union
 
 try:
-    from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
-    from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse, StreamingResponse
-    from pydantic import BaseModel, Field
     import uvicorn
+    from fastapi import FastAPI, HTTPException
+    from fastapi.middleware.cors import CORSMiddleware
+    from pydantic import BaseModel, Field
 
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
 
 from callpyback import CallPyBack
-from callpyback.plugins.core.message_queue import MessageQueue, Message
-
+from callpyback.plugins.core.message_queue import Message, MessageQueue
 
 # Pydantic models for API
 if HAS_FASTAPI:

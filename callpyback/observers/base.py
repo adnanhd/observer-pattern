@@ -18,7 +18,6 @@ class BaseObserver(ABC):
     @abstractmethod
     def update(self, context: ExecutionContext) -> None:
         """Handle execution context update."""
-        pass
 
     @property
     def priority(self) -> int:

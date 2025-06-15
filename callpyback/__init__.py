@@ -16,6 +16,10 @@ from callpyback.factories import (
     on_failure,
     on_success,
 )
+from callpyback.management.error_handling import (
+    ConditionalErrorHandler,
+    DefaultErrorHandler,
+)
 from callpyback.observers.base import BaseObserver
 from callpyback.observers.builtin import (
     LoggingObserver,
@@ -23,10 +27,15 @@ from callpyback.observers.builtin import (
     TimingObserver,
 )
 from callpyback.observers.callback import CallbackObserver
-
-from callpyback.management.error_handling import (
-    DefaultErrorHandler,
-    ConditionalErrorHandler,
+from callpyback.plugins import (
+    CallPyBackPluginManager,
+    EventPriority,
+    ExecutionMode,
+    emit_event,
+    get_manager,
+    on_event,
+    plugin_session,
+    run_parallel,
 )
 
 __version__ = "2.0.0"
@@ -60,4 +69,13 @@ __all__ = [
     # Error handling
     "DefaultErrorHandler",
     "ConditionalErrorHandler",
+    # Plugin management
+    "CallPyBackPluginManager",
+    "plugin_session",
+    "run_parallel",
+    "emit_event",
+    "on_event",
+    "get_manager",
+    "ExecutionMode",
+    "EventPriority",
 ]

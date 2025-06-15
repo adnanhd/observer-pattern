@@ -1,16 +1,15 @@
+#!/usr/bin/env python3
 """
-Core message queue and event bus implementation.
+Core message queue implementation.
 Provides publish-subscribe patterns with CallPyBack integration.
 """
 
-import asyncio
 import logging
 import threading
 import time
 from collections import defaultdict
-from concurrent.futures import Future
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 from uuid import uuid4
 
 from callpyback import CallPyBack
@@ -40,7 +39,7 @@ class Subscription:
 
     id: str
     topic: str
-    callback: CallPyBack
+    callback: Callable
     filters: Dict[str, Any] = field(default_factory=dict)
     max_retries: int = 3
     retry_count: int = 0
@@ -165,7 +164,7 @@ class MessageQueue:
     def subscribe(
         self,
         topic: str,
-        callback: Union[CallPyBack, Callable],
+        callback: Callable,
         filters: Optional[Dict[str, Any]] = None,
         max_retries: int = 3,
     ) -> str:
@@ -174,24 +173,13 @@ class MessageQueue:
 
         Args:
             topic: Topic to subscribe to
-            callback: CallPyBack instance or callable
-            filters: Message filters
+            callback: Callback function (will be wrapped in CallPyBack if needed)
+            filters: Optional message filters
             max_retries: Maximum retry attempts
 
         Returns:
             Subscription ID
         """
-        # Wrap callable in CallPyBack if needed
-        if not isinstance(callback, CallPyBack):
-            callback = CallPyBack(
-                observers=[self.observer],
-                exception_classes=(Exception,),
-                default_return=None,
-            )(callback)
-        else:
-            # Add our observer to existing CallPyBack
-            callback.add_observer(self.observer)
-
         subscription = Subscription(
             id=str(uuid4()),
             topic=topic,
@@ -209,19 +197,19 @@ class MessageQueue:
 
     def unsubscribe(self, subscription_id: str) -> bool:
         """
-        Unsubscribe by subscription ID.
+        Unsubscribe from a topic.
 
         Args:
-            subscription_id: ID of subscription to remove
+            subscription_id: Subscription ID to remove
 
         Returns:
             True if subscription was found and removed
         """
         with self.lock:
-            for topic, subs in self.subscriptions.items():
-                for i, sub in enumerate(subs):
+            for topic, subscriptions in self.subscriptions.items():
+                for i, sub in enumerate(subscriptions):
                     if sub.id == subscription_id:
-                        subs.pop(i)
+                        subscriptions.pop(i)
                         self.stats["subscriptions_active"] -= 1
                         logger.debug(
                             f"Unsubscribed {subscription_id} from topic '{topic}'"
@@ -232,13 +220,13 @@ class MessageQueue:
     def publish(
         self,
         topic: str,
-        payload: Any,
+        payload: Any = None,
         headers: Optional[Dict[str, Any]] = None,
         sender: Optional[str] = None,
         reply_to: Optional[str] = None,
     ) -> str:
         """
-        Publish message to topic.
+        Publish a message to a topic.
 
         Args:
             topic: Topic to publish to
@@ -266,58 +254,6 @@ class MessageQueue:
         logger.debug(f"Published message {message.id} to topic '{topic}'")
         return message.id
 
-    def request(
-        self,
-        topic: str,
-        payload: Any,
-        timeout: float = 10.0,
-        headers: Optional[Dict[str, Any]] = None,
-    ) -> Any:
-        """
-        Publish message and wait for reply (request-response pattern).
-
-        Args:
-            topic: Topic to publish to
-            payload: Message payload
-            timeout: Response timeout
-            headers: Optional headers
-
-        Returns:
-            Response payload
-        """
-        reply_topic = f"reply_{uuid4()}"
-        correlation_id = str(uuid4())
-
-        # Set up temporary subscription for reply
-        reply_future: Future = Future()
-
-        def reply_handler(message: Message):
-            if message.correlation_id == correlation_id:
-                reply_future.set_result(message.payload)
-                return message.payload
-
-        reply_sub_id = self.subscribe(reply_topic, reply_handler)
-
-        try:
-            # Publish request
-            request_headers = headers or {}
-            request_headers.update(
-                {"reply_to": reply_topic, "correlation_id": correlation_id}
-            )
-
-            message_id = self.publish(
-                topic=topic,
-                payload=payload,
-                headers=request_headers,
-                reply_to=reply_topic,
-            )
-
-            # Wait for reply
-            return reply_future.result(timeout=timeout)
-
-        finally:
-            self.unsubscribe(reply_sub_id)
-
     def _worker_loop(self):
         """Main worker thread loop."""
         while self.running:
@@ -342,9 +278,10 @@ class MessageQueue:
 
     def _process_message(self, message: Message):
         """Process a single message."""
-        topic_subscriptions = self.subscriptions.get(message.topic, [])
+        with self.lock:
+            subscriptions = self.subscriptions.get(message.topic, [])
 
-        for subscription in topic_subscriptions:
+        for subscription in subscriptions:
             if not subscription.active:
                 continue
 
@@ -352,26 +289,13 @@ class MessageQueue:
                 continue
 
             try:
-                # Add metadata for observer
-                if hasattr(subscription.callback, "_execute_with_observation"):
-                    # This is a wrapped function, we need to add metadata differently
-                    result = subscription.callback(message)
-                else:
-                    result = subscription.callback(message)
-
-                # Handle reply-to
-                if message.reply_to and result is not None:
-                    self.publish(
-                        topic=message.reply_to,
-                        payload=result,
-                        headers={"correlation_id": message.correlation_id},
-                    )
-
+                # Execute callback with context
+                subscription.callback(message)
+                #    message_topic=message.topic,
+                #    subscription_id=subscription.id,
                 self.stats["messages_processed"] += 1
-                subscription.retry_count = 0  # Reset on success
 
             except Exception as e:
-                logger.error(f"Error processing message {message.id}: {e}")
                 self._handle_message_error(message, subscription, e)
 
     def _message_matches_filters(
@@ -439,38 +363,3 @@ class MessageQueue:
         """Clear dead letter queue."""
         with self.lock:
             self.dead_letter_queue.clear()
-
-
-class EventBus(MessageQueue):
-    """
-    High-level event bus built on MessageQueue.
-    Provides simplified event-driven programming interface.
-    """
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.event_handlers: Dict[str, List[Callable]] = defaultdict(list)
-
-    def on(self, event: str, handler: Callable):
-        """Register event handler (decorator style)."""
-        self.event_handlers[event].append(handler)
-        self.subscribe(event, handler)
-        return handler
-
-    def emit(self, event: str, *args, **kwargs):
-        """Emit event with arguments."""
-        self.publish(event, {"args": args, "kwargs": kwargs})
-
-    def once(self, event: str, handler: Callable):
-        """Register one-time event handler."""
-
-        def wrapper(message):
-            try:
-                result = handler(message)
-                return result
-            finally:
-                # Remove handler after first execution
-                if handler in self.event_handlers[event]:
-                    self.event_handlers[event].remove(handler)
-
-        return self.on(event, wrapper)

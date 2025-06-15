@@ -3,24 +3,17 @@ Process-based executor for CPU-intensive parallel task execution.
 Provides process pool management with inter-process communication.
 """
 
+import logging
 import multiprocessing as mp
 import pickle
-import logging
-import queue
 import time
-from concurrent.futures import (
-    wait as wait_for_futures,
-    Future,
-    ProcessPoolExecutor,
-    as_completed,
-    ALL_COMPLETED,
-)
+from concurrent.futures import ALL_COMPLETED, Future, ProcessPoolExecutor, as_completed
+from concurrent.futures import wait as wait_for_futures
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Union
 from uuid import uuid4
 
 from callpyback import CallPyBack
-from callpyback.plugins.core.message_queue import Message
 
 
 @dataclass
@@ -73,9 +66,10 @@ def execute_task_in_process(task_data: bytes) -> ProcessResult:
     This function will be pickled and sent to worker processes.
     """
     import os
-    import psutil
     import time
     import traceback
+
+    import psutil
 
     try:
         # Deserialize task
@@ -277,7 +271,7 @@ class ProcessExecutor:
 
             with self.cond:
                 self.active_tasks[task.id] = task
-                self.futures[task.id]    = future
+                self.futures[task.id] = future
                 self.stats["tasks_submitted"] += 1
                 self.cond.notify_all()
 

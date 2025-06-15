@@ -6,8 +6,6 @@ from typing_compat import List
 class CallPyBackError(Exception):
     """Base exception for all CallPyBack errors."""
 
-    pass
-
 
 class StateTransitionError(CallPyBackError):
     """Raised when an invalid state transition is attempted."""
@@ -25,16 +23,10 @@ class StateTransitionError(CallPyBackError):
 class ObserverError(CallPyBackError):
     """Raised when observer operations fail."""
 
-    pass
-
 
 class ConfigurationError(CallPyBackError):
     """Raised when CallPyBack is misconfigured."""
 
-    pass
-
 
 class ExecutionError(CallPyBackError):
     """Raised when function execution fails in unexpected ways."""
-
-    pass
