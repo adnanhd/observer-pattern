@@ -1,81 +1,70 @@
 """
-CallPyBack: Advanced callback decorator with formal design patterns.
+CallPyBack: Message-driven function pipelines with pub-sub, executors, and RPC.
 
-This package provides a theoretically sound implementation of the observer pattern
-for Python function decoration, addressing common limitations in callback systems.
+This package provides a clean implementation of message queues, pipelines,
+and remote procedure calls for Python function orchestration.
 """
 
-from callpyback.core.context import ExecutionContext, ExecutionFailure, ExecutionResult
-from callpyback.core.decorator import CallPyBack
-from callpyback.core.state_machine import ExecutionPhase, ExecutionState
-from callpyback.errors import CallPyBackError, ObserverError, StateTransitionError
-from callpyback.factories import (
-    create_callback_observer,
-    on_call,
-    on_completion,
-    on_failure,
-    on_success,
-)
-from callpyback.management.error_handling import (
-    ConditionalErrorHandler,
-    DefaultErrorHandler,
-)
-from callpyback.observers.base import BaseObserver
-from callpyback.observers.builtin import (
-    LoggingObserver,
+from callpyback.executor import ExecutionMode, Executor
+from callpyback.observers import (
+    CallbackObserver,
+    CompositeObserver,
+    ExecutionContext,
+    FLOPsObserver,
+    MemoryObserver,
     MetricsObserver,
+    Observer,
     TimingObserver,
+    observe,
 )
-from callpyback.observers.callback import CallbackObserver
-from callpyback.plugins import (
-    CallPyBackPluginManager,
-    EventPriority,
-    ExecutionMode,
-    emit_event,
-    get_manager,
-    on_event,
-    plugin_session,
-    run_parallel,
+from callpyback.pipeline import Pipeline, PipelineStep, task
+from callpyback.queue import MessageQueue
+from callpyback.rpc import RPCClient, RPCServer
+from callpyback.transports import MemoryTransport, Transport
+from callpyback.types import (
+    Message,
+    RPCRequest,
+    RPCResponse,
+    TaskRequest,
+    TaskResult,
+    TaskStatus,
 )
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 __author__ = "Adnan Harun Dogan"
 __email__ = "adnanharundogan@gmail.com"
 
 __all__ = [
-    # Core classes
-    "CallPyBack",
-    "ExecutionContext",
-    "ExecutionResult",
-    "ExecutionFailure",
-    "ExecutionState",
-    "ExecutionPhase",
-    # Observer classes
-    "BaseObserver",
-    "CallbackObserver",
-    "LoggingObserver",
-    "MetricsObserver",
-    "TimingObserver",
-    # Factory functions
-    "on_call",
-    "on_success",
-    "on_failure",
-    "on_completion",
-    "create_callback_observer",
-    # Exceptions
-    "CallPyBackError",
-    "StateTransitionError",
-    "ObserverError",
-    # Error handling
-    "DefaultErrorHandler",
-    "ConditionalErrorHandler",
-    # Plugin management
-    "CallPyBackPluginManager",
-    "plugin_session",
-    "run_parallel",
-    "emit_event",
-    "on_event",
-    "get_manager",
+    # Types
+    "Message",
+    "TaskRequest",
+    "TaskResult",
+    "TaskStatus",
+    "RPCRequest",
+    "RPCResponse",
+    # Transport
+    "Transport",
+    "MemoryTransport",
+    # Queue
+    "MessageQueue",
+    # Executor
+    "Executor",
     "ExecutionMode",
-    "EventPriority",
+    # Pipeline
+    "Pipeline",
+    "PipelineStep",
+    "task",
+    # RPC
+    "RPCServer",
+    "RPCClient",
+    # Observers
+    "Observer",
+    "ExecutionContext",
+    "TimingObserver",
+    "MetricsObserver",
+    "MemoryObserver",
+    "FLOPsObserver",
+    "CompositeObserver",
+    "CallbackObserver",
+    "observe",
 ]

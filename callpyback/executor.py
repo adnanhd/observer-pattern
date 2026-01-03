@@ -1,0 +1,268 @@
+"""Unified executor with sequential, thread, and process modes."""
+
+import asyncio
+import multiprocessing as mp
+import os
+import pickle
+import threading
+import time
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from enum import Enum
+from queue import Queue
+from typing import Any, Callable, Dict, Iterable, List, Optional
+from uuid import uuid4
+
+from callpyback.types import TaskRequest, TaskResult, TaskStatus
+
+
+class ExecutionMode(str, Enum):
+    """Execution mode for tasks."""
+
+    SEQUENTIAL = "sequential"
+    THREAD = "thread"
+    PROCESS = "process"
+
+
+def _execute_in_process(task_data: bytes) -> Dict[str, Any]:
+    """Execute task in separate process (must be picklable)."""
+    start = time.time()
+    try:
+        task = pickle.loads(task_data)
+        func = task["func"]
+        args = task["args"]
+        kwargs = task["kwargs"]
+
+        result = func(*args, **kwargs)
+
+        return {
+            "task_id": task["task_id"],
+            "status": "completed",
+            "value": result,
+            "error": None,
+            "execution_time": time.time() - start,
+            "worker_id": f"process-{os.getpid()}",
+        }
+    except Exception as e:
+        return {
+            "task_id": task.get("task_id", "unknown"),
+            "status": "failed",
+            "value": None,
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "execution_time": time.time() - start,
+            "worker_id": f"process-{os.getpid()}",
+        }
+
+
+class Executor:
+    """Unified task executor with multiple execution modes."""
+
+    def __init__(
+        self,
+        mode: ExecutionMode = ExecutionMode.SEQUENTIAL,
+        max_workers: int = 4,
+    ):
+        self._mode = mode
+        self._max_workers = max_workers
+        self._results: Dict[str, TaskResult] = {}
+        self._futures: Dict[str, Future] = {}
+        self._lock = threading.RLock()
+        self._pool = None
+        self._running = False
+
+    @property
+    def mode(self) -> ExecutionMode:
+        return self._mode
+
+    def start(self) -> None:
+        """Start executor pool."""
+        if self._running:
+            return
+
+        if self._mode == ExecutionMode.THREAD:
+            self._pool = ThreadPoolExecutor(max_workers=self._max_workers)
+        elif self._mode == ExecutionMode.PROCESS:
+            self._pool = ProcessPoolExecutor(max_workers=self._max_workers)
+
+        self._running = True
+
+    def stop(self, wait: bool = True) -> None:
+        """Stop executor pool."""
+        if not self._running:
+            return
+
+        if self._pool:
+            self._pool.shutdown(wait=wait)
+            self._pool = None
+
+        self._running = False
+
+    def submit(
+        self,
+        func: Callable,
+        *args,
+        priority: int = 0,
+        timeout: Optional[float] = None,
+        **kwargs,
+    ) -> str:
+        """Submit task for execution. Returns task_id."""
+        task_id = str(uuid4())
+
+        if self._mode == ExecutionMode.SEQUENTIAL:
+            result = self._execute_sync(task_id, func, args, kwargs)
+            with self._lock:
+                self._results[task_id] = result
+        else:
+            if not self._running:
+                self.start()
+
+            if self._mode == ExecutionMode.THREAD:
+                future = self._pool.submit(
+                    self._execute_sync, task_id, func, args, kwargs
+                )
+            else:
+                # Process mode - need to pickle
+                task_data = pickle.dumps(
+                    {"task_id": task_id, "func": func, "args": args, "kwargs": kwargs}
+                )
+                future = self._pool.submit(_execute_in_process, task_data)
+
+            with self._lock:
+                self._futures[task_id] = future
+
+            future.add_done_callback(lambda f, tid=task_id: self._on_complete(tid, f))
+
+        return task_id
+
+    async def submit_async(self, func: Callable, *args, **kwargs) -> str:
+        """Submit task asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.submit(func, *args, **kwargs)
+        )
+
+    def result(self, task_id: str, timeout: Optional[float] = None) -> TaskResult:
+        """Get task result (blocking)."""
+        deadline = time.time() + timeout if timeout else None
+
+        while True:
+            with self._lock:
+                if task_id in self._results:
+                    return self._results[task_id]
+
+                future = self._futures.get(task_id)
+
+            if future:
+                try:
+                    remaining = deadline - time.time() if deadline else None
+                    if remaining is not None and remaining <= 0:
+                        raise TimeoutError(f"Task {task_id} timed out")
+
+                    raw = future.result(timeout=remaining)
+
+                    # Process mode returns dict
+                    if isinstance(raw, dict):
+                        return TaskResult(
+                            task_id=raw["task_id"],
+                            status=TaskStatus(raw["status"]),
+                            value=raw.get("value"),
+                            error=raw.get("error"),
+                            error_type=raw.get("error_type"),
+                            execution_time=raw.get("execution_time", 0),
+                            worker_id=raw.get("worker_id", ""),
+                        )
+                    return raw
+                except TimeoutError:
+                    raise
+                except Exception as e:
+                    return TaskResult(
+                        task_id=task_id,
+                        status=TaskStatus.FAILED,
+                        error=str(e),
+                        error_type=type(e).__name__,
+                    )
+
+            if deadline and time.time() >= deadline:
+                raise TimeoutError(f"Task {task_id} not found")
+
+            time.sleep(0.01)
+
+    async def result_async(
+        self, task_id: str, timeout: Optional[float] = None
+    ) -> TaskResult:
+        """Get task result asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, lambda: self.result(task_id, timeout))
+
+    def map(
+        self, func: Callable, items: Iterable, timeout: Optional[float] = None
+    ) -> List[TaskResult]:
+        """Map function over items."""
+        task_ids = [self.submit(func, item) for item in items]
+        return [self.result(tid, timeout) for tid in task_ids]
+
+    async def map_async(
+        self, func: Callable, items: Iterable, timeout: Optional[float] = None
+    ) -> List[TaskResult]:
+        """Map function over items asynchronously."""
+        task_ids = [await self.submit_async(func, item) for item in items]
+        return [await self.result_async(tid, timeout) for tid in task_ids]
+
+    def _execute_sync(
+        self, task_id: str, func: Callable, args: tuple, kwargs: dict
+    ) -> TaskResult:
+        """Execute task synchronously."""
+        start = time.time()
+        worker_id = f"thread-{threading.current_thread().name}"
+
+        try:
+            value = func(*args, **kwargs)
+            return TaskResult(
+                task_id=task_id,
+                status=TaskStatus.COMPLETED,
+                value=value,
+                execution_time=time.time() - start,
+                worker_id=worker_id,
+            )
+        except Exception as e:
+            return TaskResult(
+                task_id=task_id,
+                status=TaskStatus.FAILED,
+                error=str(e),
+                error_type=type(e).__name__,
+                execution_time=time.time() - start,
+                worker_id=worker_id,
+            )
+
+    def _on_complete(self, task_id: str, future: Future) -> None:
+        """Handle task completion."""
+        try:
+            result = future.result()
+            if isinstance(result, dict):
+                result = TaskResult(
+                    task_id=result["task_id"],
+                    status=TaskStatus(result["status"]),
+                    value=result.get("value"),
+                    error=result.get("error"),
+                    error_type=result.get("error_type"),
+                    execution_time=result.get("execution_time", 0),
+                    worker_id=result.get("worker_id", ""),
+                )
+        except Exception as e:
+            result = TaskResult(
+                task_id=task_id,
+                status=TaskStatus.FAILED,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+
+        with self._lock:
+            self._results[task_id] = result
+            self._futures.pop(task_id, None)
+
+    def __enter__(self) -> "Executor":
+        self.start()
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.stop()
