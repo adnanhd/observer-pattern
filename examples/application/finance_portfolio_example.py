@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Finance Portfolio Analytics - Application Example
-Demonstrates parallel financial computations and risk analysis.
+Demonstrates parallel financial computations and risk analysis using v3 API.
 """
 
 import math
@@ -10,7 +10,14 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List
 
-from callpyback import ExecutionMode, emit_event, on_event, execution_session
+from callpyback import (
+    ExecutionMode,
+    Executor,
+    MessageQueue,
+    MetricsObserver,
+    TimingObserver,
+    observe,
+)
 
 
 @dataclass
@@ -30,61 +37,69 @@ class Portfolio:
     cash: float = 0.0
 
 
-# Finance event handlers
-@on_event("portfolio.analysis.started")
-def handle_analysis_started(message):
-    portfolio_name = message.payload.get("portfolio_name", "unknown")
-    analysis_type = message.payload.get("analysis_type", "unknown")
-    print(f"💼 Started {analysis_type} for portfolio: {portfolio_name}")
+# Create observers for profiling
+mc_timing = TimingObserver(name="monte_carlo")
+risk_timing = TimingObserver(name="risk_metrics")
+opt_timing = TimingObserver(name="optimization")
+metrics = MetricsObserver()
 
 
-@on_event("portfolio.analysis.completed")
-def handle_analysis_completed(message):
-    payload = message.payload
-    portfolio_name = payload.get("portfolio_name", "unknown")
-    analysis_type = payload.get("analysis_type", "unknown")
-    result = payload.get("result", {})
-    duration = payload.get("duration", 0)
+def setup_event_handlers(queue: MessageQueue):
+    """Setup message queue event handlers for finance events."""
 
-    if analysis_type == "monte_carlo":
-        expected_return = result.get("expected_annual_return", 0)
-        var_95 = result.get("var_95", 0)
-        print(
-            f"📊 Monte Carlo for {portfolio_name}: Return={expected_return:.2%}, VaR={var_95:.2%} ({duration:.2f}s)"
-        )
-    elif analysis_type == "risk_metrics":
-        sharpe = result.get("sharpe_ratio", 0)
-        max_drawdown = result.get("max_drawdown", 0)
-        print(
-            f"📈 Risk metrics for {portfolio_name}: Sharpe={sharpe:.3f}, MaxDD={max_drawdown:.2%} ({duration:.2f}s)"
-        )
-    else:
-        print(f"✅ {analysis_type} completed for {portfolio_name} in {duration:.2f}s")
+    @queue.on("portfolio.analysis.started")
+    def handle_analysis_started(message):
+        portfolio_name = message.payload.get("portfolio_name", "unknown")
+        analysis_type = message.payload.get("analysis_type", "unknown")
+        print(f"  [Analysis] Started {analysis_type} for {portfolio_name}")
+
+    @queue.on("portfolio.analysis.completed")
+    def handle_analysis_completed(message):
+        payload = message.payload
+        portfolio_name = payload.get("portfolio_name", "unknown")
+        analysis_type = payload.get("analysis_type", "unknown")
+        result = payload.get("result", {})
+        duration = payload.get("duration", 0)
+
+        if analysis_type == "monte_carlo":
+            expected_return = result.get("expected_annual_return", 0)
+            var_95 = result.get("var_95", 0)
+            print(
+                f"  [Monte Carlo] {portfolio_name}: Return={expected_return:.2%}, VaR={var_95:.2%} ({duration:.2f}s)"
+            )
+        elif analysis_type == "risk_metrics":
+            sharpe = result.get("sharpe_ratio", 0)
+            max_drawdown = result.get("max_drawdown", 0)
+            print(
+                f"  [Risk] {portfolio_name}: Sharpe={sharpe:.3f}, MaxDD={max_drawdown:.2%} ({duration:.2f}s)"
+            )
+
+    @queue.on("market.risk.alert")
+    def handle_risk_alert(message):
+        payload = message.payload
+        alert_type = payload.get("alert_type", "unknown")
+        portfolio_name = payload.get("portfolio_name", "unknown")
+        severity = payload.get("severity", "medium")
+        print(f"  [ALERT] {severity.upper()}: {alert_type} in {portfolio_name}")
+
+    @queue.on("optimization.*.completed")
+    def handle_optimization_completed(message):
+        optimizer_type = message.topic.split(".")[1]
+        payload = message.payload
+        improvement = payload.get("improvement_pct", 0)
+        print(f"  [Optimization] {optimizer_type}: {improvement:.1f}% improvement")
 
 
-@on_event("market.risk.alert")
-def handle_risk_alert(message):
-    payload = message.payload
-    alert_type = payload.get("alert_type", "unknown")
-    portfolio_name = payload.get("portfolio_name", "unknown")
-    severity = payload.get("severity", "medium")
-    print(f"🚨 {severity.upper()} RISK ALERT: {alert_type} in {portfolio_name}")
-
-
-@on_event("optimization.*.completed")
-def handle_optimization_completed(message):
-    optimizer_type = message.topic.split(".")[1]
-    payload = message.payload
-    improvement = payload.get("improvement_pct", 0)
-    print(f"🎯 {optimizer_type} optimization: {improvement:.1f}% improvement")
-
-
+@observe(mc_timing, metrics)
 def monte_carlo_simulation(
-    portfolio: Portfolio, days: int = 252, simulations: int = 10000
+    portfolio: Portfolio,
+    queue: MessageQueue,
+    days: int = 252,
+    simulations: int = 10000,
 ) -> Dict:
-    """CPU-intensive Monte Carlo portfolio simulation"""
+    """CPU-intensive Monte Carlo portfolio simulation."""
 
-    emit_event(
+    queue.publish(
         "portfolio.analysis.started",
         {
             "portfolio_name": portfolio.name,
@@ -97,23 +112,19 @@ def monte_carlo_simulation(
     start_time = time.time()
 
     try:
-        # Initialize simulation parameters
-        dt = 1.0 / 252  # Daily time step
+        dt = 1.0 / 252
         portfolio_values = []
 
-        # Run Monte Carlo simulations (CPU intensive)
         for sim in range(simulations):
-            current_value = 100000  # Starting portfolio value
+            current_value = 100000
             daily_values = [current_value]
 
             for day in range(days):
-                # Generate correlated random returns for each asset
                 portfolio_return = 0
 
                 for i, (asset, weight) in enumerate(
                     zip(portfolio.assets, portfolio.weights)
                 ):
-                    # Random return using normal distribution
                     random_shock = random.gauss(0, 1)
                     daily_return = (
                         asset.expected_return * dt
@@ -126,23 +137,18 @@ def monte_carlo_simulation(
 
             portfolio_values.append(daily_values)
 
-            # Yield control occasionally to prevent blocking
             if sim % 1000 == 0 and sim > 0:
                 time.sleep(0.001)
 
-        # Calculate statistics from simulations
         final_values = [values[-1] for values in portfolio_values]
         final_values.sort()
 
-        # Calculate returns
         returns = [(val - 100000) / 100000 for val in final_values]
 
-        # Risk metrics
         expected_return = sum(returns) / len(returns)
-        var_95 = returns[int(0.05 * len(returns))]  # 95% VaR
-        var_99 = returns[int(0.01 * len(returns))]  # 99% VaR
+        var_95 = returns[int(0.05 * len(returns))]
+        var_99 = returns[int(0.01 * len(returns))]
 
-        # Expected annual return
         expected_annual_return = (1 + expected_return) ** (252.0 / days) - 1
 
         duration = time.time() - start_time
@@ -160,9 +166,8 @@ def monte_carlo_simulation(
             "status": "success",
         }
 
-        # Check for risk alerts
-        if var_95 < -0.20:  # More than 20% loss at 95% confidence
-            emit_event(
+        if var_95 < -0.20:
+            queue.publish(
                 "market.risk.alert",
                 {
                     "alert_type": "high_portfolio_risk",
@@ -172,7 +177,7 @@ def monte_carlo_simulation(
                 },
             )
 
-        emit_event(
+        queue.publish(
             "portfolio.analysis.completed",
             {
                 "portfolio_name": portfolio.name,
@@ -186,7 +191,7 @@ def monte_carlo_simulation(
 
     except Exception as e:
         duration = time.time() - start_time
-        error_result = {
+        return {
             "portfolio_name": portfolio.name,
             "analysis_type": "monte_carlo",
             "error": str(e),
@@ -194,14 +199,12 @@ def monte_carlo_simulation(
             "status": "failed",
         }
 
-        emit_event("portfolio.analysis.failed", error_result)
-        return error_result
 
+@observe(risk_timing, metrics)
+def calculate_risk_metrics(portfolio: Portfolio, queue: MessageQueue) -> Dict:
+    """Calculate comprehensive risk metrics."""
 
-def calculate_risk_metrics(portfolio: Portfolio) -> Dict:
-    """Calculate comprehensive risk metrics"""
-
-    emit_event(
+    queue.publish(
         "portfolio.analysis.started",
         {"portfolio_name": portfolio.name, "analysis_type": "risk_metrics"},
     )
@@ -209,26 +212,21 @@ def calculate_risk_metrics(portfolio: Portfolio) -> Dict:
     start_time = time.time()
 
     try:
-        # Calculate portfolio statistics
         portfolio_return = sum(
             asset.expected_return * weight
             for asset, weight in zip(portfolio.assets, portfolio.weights)
         )
 
-        # Portfolio volatility (simplified, assumes zero correlation)
         portfolio_variance = sum(
             (asset.volatility * weight) ** 2
             for asset, weight in zip(portfolio.assets, portfolio.weights)
         )
         portfolio_volatility = math.sqrt(portfolio_variance)
 
-        # Risk-free rate (assume 2%)
         risk_free_rate = 0.02
-
-        # Sharpe ratio
         sharpe_ratio = (portfolio_return - risk_free_rate) / portfolio_volatility
 
-        # Simulate historical data for additional metrics
+        # Simulate historical data
         days = 252
         daily_returns = []
 
@@ -241,24 +239,20 @@ def calculate_risk_metrics(portfolio: Portfolio) -> Dict:
                 daily_return += weight * asset_return
             daily_returns.append(daily_return)
 
-        # Calculate maximum drawdown
-        cumulative_returns = []
+        # Maximum drawdown
         cumulative = 1.0
         peak = 1.0
         max_drawdown = 0.0
 
         for ret in daily_returns:
             cumulative *= 1 + ret
-            cumulative_returns.append(cumulative)
-
             if cumulative > peak:
                 peak = cumulative
             else:
                 drawdown = (peak - cumulative) / peak
                 max_drawdown = max(max_drawdown, drawdown)
 
-        # Beta calculation (simplified, using market proxy)
-        market_volatility = 0.16  # Assume 16% market volatility
+        market_volatility = 0.16
         beta = portfolio_volatility / market_volatility
 
         duration = time.time() - start_time
@@ -271,14 +265,12 @@ def calculate_risk_metrics(portfolio: Portfolio) -> Dict:
             "sharpe_ratio": sharpe_ratio,
             "max_drawdown": max_drawdown,
             "beta": beta,
-            "var_95_daily": -1.645
-            * portfolio_volatility
-            / math.sqrt(252),  # Parametric VaR
+            "var_95_daily": -1.645 * portfolio_volatility / math.sqrt(252),
             "duration": duration,
             "status": "success",
         }
 
-        emit_event(
+        queue.publish(
             "portfolio.analysis.completed",
             {
                 "portfolio_name": portfolio.name,
@@ -292,7 +284,7 @@ def calculate_risk_metrics(portfolio: Portfolio) -> Dict:
 
     except Exception as e:
         duration = time.time() - start_time
-        error_result = {
+        return {
             "portfolio_name": portfolio.name,
             "analysis_type": "risk_metrics",
             "error": str(e),
@@ -300,27 +292,24 @@ def calculate_risk_metrics(portfolio: Portfolio) -> Dict:
             "status": "failed",
         }
 
-        emit_event("portfolio.analysis.failed", error_result)
-        return error_result
 
-
-def portfolio_optimization(portfolio: Portfolio, optimizer_type: str) -> Dict:
-    """Optimize portfolio weights using different algorithms"""
+@observe(opt_timing, metrics)
+def portfolio_optimization(
+    portfolio: Portfolio, queue: MessageQueue, optimizer_type: str
+) -> Dict:
+    """Optimize portfolio weights using iterative methods."""
 
     start_time = time.time()
 
-    # Simulate optimization algorithm (computationally intensive)
     num_iterations = random.randint(1000, 5000)
     best_sharpe = 0
     best_weights = portfolio.weights.copy()
 
     for iteration in range(num_iterations):
-        # Generate random weight allocation
         random_weights = [random.random() for _ in portfolio.assets]
         weight_sum = sum(random_weights)
-        random_weights = [w / weight_sum for w in random_weights]  # Normalize
+        random_weights = [w / weight_sum for w in random_weights]
 
-        # Calculate portfolio metrics for these weights
         portfolio_return = sum(
             asset.expected_return * weight
             for asset, weight in zip(portfolio.assets, random_weights)
@@ -337,7 +326,6 @@ def portfolio_optimization(portfolio: Portfolio, optimizer_type: str) -> Dict:
             best_sharpe = sharpe
             best_weights = random_weights.copy()
 
-        # Simulate computational work
         if iteration % 500 == 0:
             time.sleep(0.001)
 
@@ -367,14 +355,13 @@ def portfolio_optimization(portfolio: Portfolio, optimizer_type: str) -> Dict:
         "duration": duration,
     }
 
-    emit_event(f"optimization.{optimizer_type}.completed", result)
+    queue.publish(f"optimization.{optimizer_type}.completed", result)
     return result
 
 
 def create_sample_portfolios() -> List[Portfolio]:
-    """Create sample portfolios for analysis"""
+    """Create sample portfolios for analysis."""
 
-    # Tech-heavy portfolio
     tech_assets = [
         Asset("AAPL", 150.0, 0.25, 0.12, "Technology"),
         Asset("MSFT", 300.0, 0.22, 0.11, "Technology"),
@@ -383,7 +370,6 @@ def create_sample_portfolios() -> List[Portfolio]:
     ]
     tech_portfolio = Portfolio("Tech Growth", tech_assets, [0.3, 0.3, 0.25, 0.15])
 
-    # Diversified portfolio
     diversified_assets = [
         Asset("SPY", 400.0, 0.16, 0.10, "Index"),
         Asset("BND", 80.0, 0.05, 0.03, "Bonds"),
@@ -395,7 +381,6 @@ def create_sample_portfolios() -> List[Portfolio]:
         "Balanced", diversified_assets, [0.4, 0.2, 0.1, 0.2, 0.1]
     )
 
-    # High-risk portfolio
     risk_assets = [
         Asset("BTC", 45000.0, 0.80, 0.25, "Crypto"),
         Asset("TSLA", 250.0, 0.45, 0.20, "Technology"),
@@ -408,76 +393,99 @@ def create_sample_portfolios() -> List[Portfolio]:
 
 
 def main():
-    """Demo parallel financial analysis"""
-    print("💼 Finance Portfolio Analytics")
+    """Demo parallel financial analysis."""
+    print("Finance Portfolio Analytics")
     print("=" * 50)
 
+    # Setup
+    queue = MessageQueue()
+    setup_event_handlers(queue)
+
     portfolios = create_sample_portfolios()
+    executor = Executor(mode=ExecutionMode.THREAD, max_workers=6)
 
-    with execution_session() as manager:
-        # Configure for compute-intensive financial calculations
-        manager.configure().processes(3).max_threads(4).execution_mode(
-            ExecutionMode.HYBRID
-        ).apply()
+    print(f"Analyzing {len(portfolios)} portfolios with parallel processing...\n")
 
-        print(f"📊 Analyzing {len(portfolios)} portfolios with parallel processing...")
-
+    with executor:
         # 1. Run Monte Carlo simulations in parallel
-        print("\n🎲 Running Monte Carlo simulations...")
+        print("Running Monte Carlo simulations...")
         mc_start = time.time()
-        mc_results = manager.map_parallel(
-            lambda p: monte_carlo_simulation(p, days=252, simulations=8000), portfolios
-        )
-        mc_duration = time.time() - mc_start
 
+        mc_task_ids = []
+        for p in portfolios:
+            task_id = executor.submit(monte_carlo_simulation, p, queue, 252, 8000)
+            mc_task_ids.append(task_id)
+
+        mc_results = [executor.result(tid).value for tid in mc_task_ids]
+        mc_duration = time.time() - mc_start
         print(
-            f"   Completed {len(mc_results)} Monte Carlo analyses in {mc_duration:.2f}s"
+            f"Completed {len(mc_results)} Monte Carlo analyses in {mc_duration:.2f}s\n"
         )
 
         # 2. Calculate risk metrics in parallel
-        print("\n📈 Calculating risk metrics...")
-        risk_results = manager.map_parallel(calculate_risk_metrics, portfolios)
+        print("Calculating risk metrics...")
+        risk_task_ids = []
+        for p in portfolios:
+            task_id = executor.submit(calculate_risk_metrics, p, queue)
+            risk_task_ids.append(task_id)
+
+        risk_results = [executor.result(tid).value for tid in risk_task_ids]
 
         # 3. Run portfolio optimizations in parallel
-        print("\n🎯 Running portfolio optimizations...")
+        print("\nRunning portfolio optimizations...")
         optimization_tasks = [
             (portfolios[0], "mean_variance"),
             (portfolios[1], "risk_parity"),
             (portfolios[2], "maximum_sharpe"),
         ]
 
-        opt_results = manager.parallel(
-            *[
-                lambda p=p, opt=opt: portfolio_optimization(p, opt)
-                for p, opt in optimization_tasks
-            ]
-        )
+        opt_task_ids = []
+        for p, opt_type in optimization_tasks:
+            task_id = executor.submit(portfolio_optimization, p, queue, opt_type)
+            opt_task_ids.append(task_id)
 
-        # Summarize results
-        print(f"\n📋 Analysis Summary:")
-        for i, portfolio in enumerate(portfolios):
-            mc_result = mc_results[i] if i < len(mc_results) else {}
-            risk_result = risk_results[i] if i < len(risk_results) else {}
+        opt_results = [executor.result(tid).value for tid in opt_task_ids]
 
-            if mc_result.get("status") == "success":
-                expected_ret = mc_result.get("expected_annual_return", 0)
-                var_95 = mc_result.get("var_95", 0)
-                print(
-                    f"   {portfolio.name}: Expected Return {expected_ret:.1%}, VaR95 {var_95:.1%}"
-                )
+    # Summarize results
+    print(f"\n{'=' * 50}")
+    print("Analysis Summary:")
 
-            if risk_result.get("status") == "success":
-                sharpe = risk_result.get("sharpe_ratio", 0)
-                max_dd = risk_result.get("max_drawdown", 0)
-                print(f"     → Sharpe: {sharpe:.2f}, Max Drawdown: {max_dd:.1%}")
+    for i, portfolio in enumerate(portfolios):
+        mc_result = mc_results[i] if i < len(mc_results) else {}
+        risk_result = risk_results[i] if i < len(risk_results) else {}
 
-        # Show system performance
-        metrics = manager.get_metrics()
-        print(f"\n📈 System Performance:")
-        print(f"   Total computations: {metrics['tasks_completed']}")
-        print(f"   Events generated: {metrics['events_published']}")
-        print(f"   Process utilization: {metrics.get('process_executor', 'N/A')}")
-        print(f"   Health status: {manager.health_check()}")
+        print(f"\n  {portfolio.name}:")
+        if mc_result.get("status") == "success":
+            expected_ret = mc_result.get("expected_annual_return", 0)
+            var_95 = mc_result.get("var_95", 0)
+            print(f"    Expected Return: {expected_ret:.1%}, VaR95: {var_95:.1%}")
+
+        if risk_result.get("status") == "success":
+            sharpe = risk_result.get("sharpe_ratio", 0)
+            max_dd = risk_result.get("max_drawdown", 0)
+            print(f"    Sharpe Ratio: {sharpe:.2f}, Max Drawdown: {max_dd:.1%}")
+
+    # Observer statistics
+    print(f"\nProfiling Statistics:")
+    print(
+        f"  Monte Carlo: {mc_timing.stats['count']} runs, avg {mc_timing.stats['avg']:.2f}s"
+    )
+    print(
+        f"  Risk Metrics: {risk_timing.stats['count']} runs, avg {risk_timing.stats['avg']:.2f}s"
+    )
+    print(
+        f"  Optimization: {opt_timing.stats['count']} runs, avg {opt_timing.stats['avg']:.2f}s"
+    )
+    print(
+        f"  Total computations: {metrics.stats['calls']}, success rate: {metrics.stats['success_rate']:.1%}"
+    )
+
+    print(f"\nFinance Analytics demonstrates:")
+    print(f"  - Monte Carlo simulations with MessageQueue events")
+    print(f"  - Risk metrics calculation (Sharpe, VaR, Drawdown)")
+    print(f"  - Portfolio optimization with iterative methods")
+    print(f"  - Parallel execution with Executor")
+    print(f"  - Observer-based profiling (TimingObserver, MetricsObserver)")
 
 
 if __name__ == "__main__":

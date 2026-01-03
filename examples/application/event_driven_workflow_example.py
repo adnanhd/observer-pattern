@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Event-Driven Workflow Engine - Conceptual Example
-Demonstrates complex event patterns, workflows, and orchestration.
+Event-Driven Workflow Engine - Application Example
+Demonstrates complex event patterns, workflows, and orchestration using v3 API.
 """
 
 import random
@@ -10,7 +10,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
-from callpyback import ExecutionMode, emit_event, on_event, execution_session
+from callpyback import (
+    ExecutionMode,
+    Executor,
+    MessageQueue,
+    Pipeline,
+    TaskResult,
+    TaskStatus,
+)
 
 
 class WorkflowStatus(Enum):
@@ -59,119 +66,12 @@ class WorkflowInstance:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-# Workflow event handlers
-@on_event("workflow.*.created")
-def handle_workflow_created(message):
-    """Handle workflow creation events"""
-    workflow_type = message.topic.split(".")[1]
-    payload = message.payload
-    workflow_id = payload.get("workflow_id", "unknown")
-    step_count = payload.get("step_count", 0)
-    print(
-        f"🔄 Workflow created: {workflow_type} ({workflow_id}) with {step_count} steps"
-    )
-
-
-@on_event("workflow.*.started")
-def handle_workflow_started(message):
-    """Handle workflow start events"""
-    workflow_type = message.topic.split(".")[1]
-    payload = message.payload
-    workflow_id = payload.get("workflow_id", "unknown")
-    trigger = payload.get("trigger", "manual")
-    print(f"🚀 Workflow started: {workflow_type} ({workflow_id}) - Trigger: {trigger}")
-
-
-@on_event("workflow.step.*.started")
-def handle_step_started(message):
-    """Handle workflow step start events"""
-    step_type = message.topic.split(".")[2]
-    payload = message.payload
-    workflow_id = payload.get("workflow_id", "unknown")
-    step_id = payload.get("step_id", "unknown")
-    print(f"📍 Step started: {step_type} ({step_id}) in workflow {workflow_id}")
-
-
-@on_event("workflow.step.*.completed")
-def handle_step_completed(message):
-    """Handle workflow step completion events"""
-    step_type = message.topic.split(".")[2]
-    payload = message.payload
-    workflow_id = payload.get("workflow_id", "unknown")
-    step_id = payload.get("step_id", "unknown")
-    duration = payload.get("duration", 0)
-    print(f"✅ Step completed: {step_type} ({step_id}) in {duration:.2f}s")
-
-
-@on_event("workflow.*.completed")
-def handle_workflow_completed(message):
-    """Handle workflow completion events"""
-    workflow_type = message.topic.split(".")[1]
-    payload = message.payload
-    workflow_id = payload.get("workflow_id", "unknown")
-    total_duration = payload.get("total_duration", 0)
-    steps_completed = payload.get("steps_completed", 0)
-    print(
-        f"🎯 Workflow completed: {workflow_type} ({workflow_id}) - "
-        f"{steps_completed} steps in {total_duration:.2f}s"
-    )
-
-
-@on_event("workflow.step.*.failed")
-def handle_step_failed(message):
-    """Handle workflow step failures"""
-    step_type = message.topic.split(".")[2]
-    payload = message.payload
-    workflow_id = payload.get("workflow_id", "unknown")
-    step_id = payload.get("step_id", "unknown")
-    error = payload.get("error", "Unknown error")
-    retry_count = payload.get("retry_count", 0)
-    print(f"❌ Step failed: {step_type} ({step_id}) - {error} (retry {retry_count})")
-
-
-@on_event("workflow.*.failed")
-def handle_workflow_failed(message):
-    """Handle workflow failures"""
-    workflow_type = message.topic.split(".")[1]
-    payload = message.payload
-    workflow_id = payload.get("workflow_id", "unknown")
-    failed_step = payload.get("failed_step", "unknown")
-    error = payload.get("error", "Unknown error")
-    print(
-        f"💥 Workflow failed: {workflow_type} ({workflow_id}) at step {failed_step} - {error}"
-    )
-
-
-@on_event("orchestration.*.triggered")
-def handle_orchestration_trigger(message):
-    """Handle orchestration triggers"""
-    orchestration_type = message.topic.split(".")[1]
-    payload = message.payload
-    trigger_event = payload.get("trigger_event", "unknown")
-    target_workflow = payload.get("target_workflow", "unknown")
-    print(
-        f"🎭 Orchestration trigger: {orchestration_type} - {trigger_event} → {target_workflow}"
-    )
-
-
-@on_event("condition.*.evaluated")
-def handle_condition_evaluation(message):
-    """Handle condition evaluation results"""
-    condition_type = message.topic.split(".")[1]
-    payload = message.payload
-    condition_id = payload.get("condition_id", "unknown")
-    result = payload.get("result", False)
-    expression = payload.get("expression", "unknown")
-    print(
-        f"🔍 Condition evaluated: {condition_type} ({condition_id}) - {expression} = {result}"
-    )
-
-
 class WorkflowEngine:
-    """Event-driven workflow execution engine"""
+    """Event-driven workflow execution engine using MessageQueue."""
 
-    def __init__(self, engine_id: str):
+    def __init__(self, engine_id: str, queue: MessageQueue):
         self.engine_id = engine_id
+        self.queue = queue
         self.workflows: Dict[str, WorkflowInstance] = {}
         self.step_processors: Dict[str, Callable] = {}
         self.running_workflows: Dict[str, bool] = {}
@@ -179,8 +79,93 @@ class WorkflowEngine:
         # Register built-in step processors
         self._register_builtin_processors()
 
+        # Setup event handlers
+        self._setup_event_handlers()
+
+    def _setup_event_handlers(self):
+        """Setup message queue event handlers."""
+
+        @self.queue.on("workflow.*.created")
+        def handle_workflow_created(message):
+            workflow_type = message.topic.split(".")[1]
+            payload = message.payload
+            workflow_id = payload.get("workflow_id", "unknown")
+            step_count = payload.get("step_count", 0)
+            print(
+                f"[Workflow] Created: {workflow_type} ({workflow_id}) with {step_count} steps"
+            )
+
+        @self.queue.on("workflow.*.started")
+        def handle_workflow_started(message):
+            workflow_type = message.topic.split(".")[1]
+            payload = message.payload
+            workflow_id = payload.get("workflow_id", "unknown")
+            trigger = payload.get("trigger", "manual")
+            print(
+                f"[Workflow] Started: {workflow_type} ({workflow_id}) - Trigger: {trigger}"
+            )
+
+        @self.queue.on("workflow.step.*.started")
+        def handle_step_started(message):
+            step_type = message.topic.split(".")[2]
+            payload = message.payload
+            step_id = payload.get("step_id", "unknown")
+            print(f"  [Step] Started: {step_type} ({step_id})")
+
+        @self.queue.on("workflow.step.*.completed")
+        def handle_step_completed(message):
+            step_type = message.topic.split(".")[2]
+            payload = message.payload
+            step_id = payload.get("step_id", "unknown")
+            duration = payload.get("duration", 0)
+            print(f"  [Step] Completed: {step_type} ({step_id}) in {duration:.2f}s")
+
+        @self.queue.on("workflow.*.completed")
+        def handle_workflow_completed(message):
+            workflow_type = message.topic.split(".")[1]
+            payload = message.payload
+            workflow_id = payload.get("workflow_id", "unknown")
+            total_duration = payload.get("total_duration", 0)
+            steps_completed = payload.get("steps_completed", 0)
+            print(
+                f"[Workflow] Completed: {workflow_type} ({workflow_id}) - {steps_completed} steps in {total_duration:.2f}s"
+            )
+
+        @self.queue.on("workflow.step.*.failed")
+        def handle_step_failed(message):
+            step_type = message.topic.split(".")[2]
+            payload = message.payload
+            step_id = payload.get("step_id", "unknown")
+            error = payload.get("error", "Unknown error")
+            retry_count = payload.get("retry_count", 0)
+            print(
+                f"  [Step] Failed: {step_type} ({step_id}) - {error} (retry {retry_count})"
+            )
+
+        @self.queue.on("workflow.*.failed")
+        def handle_workflow_failed(message):
+            workflow_type = message.topic.split(".")[1]
+            payload = message.payload
+            workflow_id = payload.get("workflow_id", "unknown")
+            failed_step = payload.get("failed_step", "unknown")
+            error = payload.get("error", "Unknown error")
+            print(
+                f"[Workflow] Failed: {workflow_type} ({workflow_id}) at step {failed_step} - {error}"
+            )
+
+        @self.queue.on("condition.*.evaluated")
+        def handle_condition_evaluation(message):
+            condition_type = message.topic.split(".")[1]
+            payload = message.payload
+            condition_id = payload.get("condition_id", "unknown")
+            result = payload.get("result", False)
+            expression = payload.get("expression", "unknown")
+            print(
+                f"  [Condition] {condition_type} ({condition_id}) - {expression} = {result}"
+            )
+
     def _register_builtin_processors(self):
-        """Register built-in step processors"""
+        """Register built-in step processors."""
         self.step_processors["http_request"] = self._process_http_request_step
         self.step_processors["data_validation"] = self._process_data_validation_step
         self.step_processors["transformation"] = self._process_transformation_step
@@ -191,12 +176,11 @@ class WorkflowEngine:
         self.step_processors["parallel_branch"] = self._process_parallel_branch_step
 
     def create_workflow(self, workflow_name: str, steps: List[Dict[str, Any]]) -> str:
-        """Create a new workflow instance"""
+        """Create a new workflow instance."""
         workflow_id = (
             f"wf_{int(time.time() * 1000) % 100000}_{random.randint(100, 999)}"
         )
 
-        # Create workflow steps
         workflow_steps = {}
         for step_config in steps:
             step = WorkflowStep(
@@ -209,14 +193,15 @@ class WorkflowEngine:
             )
             workflow_steps[step.step_id] = step
 
-        # Create workflow instance
         workflow = WorkflowInstance(
-            workflow_id=workflow_id, workflow_name=workflow_name, steps=workflow_steps
+            workflow_id=workflow_id,
+            workflow_name=workflow_name,
+            steps=workflow_steps,
         )
 
         self.workflows[workflow_id] = workflow
 
-        emit_event(
+        self.queue.publish(
             f"workflow.{workflow_name}.created",
             {
                 "workflow_id": workflow_id,
@@ -232,9 +217,9 @@ class WorkflowEngine:
         self,
         workflow_id: str,
         trigger: str = "manual",
-        initial_context: Dict[str, Any] = None,
+        initial_context: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """Start workflow execution"""
+        """Start workflow execution."""
         workflow = self.workflows.get(workflow_id)
         if not workflow:
             return False
@@ -245,7 +230,7 @@ class WorkflowEngine:
 
         self.running_workflows[workflow_id] = True
 
-        emit_event(
+        self.queue.publish(
             f"workflow.{workflow.workflow_name}.started",
             {
                 "workflow_id": workflow_id,
@@ -258,31 +243,27 @@ class WorkflowEngine:
         return True
 
     def execute_workflow(self, workflow_id: str) -> bool:
-        """Execute workflow steps"""
+        """Execute workflow steps."""
         workflow = self.workflows.get(workflow_id)
         if not workflow or not self.running_workflows.get(workflow_id):
             return False
 
         try:
             while self.running_workflows.get(workflow_id):
-                # Find ready-to-execute steps
                 ready_steps = self._get_ready_steps(workflow)
 
                 if not ready_steps:
-                    # Check if workflow is complete
                     if self._is_workflow_complete(workflow):
                         self._complete_workflow(workflow)
                         break
                     else:
-                        # No ready steps but workflow not complete - might be waiting
                         time.sleep(0.1)
                         continue
 
-                # Execute ready steps
                 for step in ready_steps:
                     self._execute_step(workflow, step)
 
-                time.sleep(0.05)  # Brief pause between step executions
+                time.sleep(0.05)
 
             return True
 
@@ -291,14 +272,13 @@ class WorkflowEngine:
             return False
 
     def _get_ready_steps(self, workflow: WorkflowInstance) -> List[WorkflowStep]:
-        """Get steps that are ready to execute"""
+        """Get steps that are ready to execute."""
         ready_steps = []
 
         for step in workflow.steps.values():
             if step.status != StepStatus.PENDING:
                 continue
 
-            # Check if all dependencies are completed
             dependencies_met = True
             for dep_id in step.dependencies:
                 dep_step = workflow.steps.get(dep_id)
@@ -312,11 +292,11 @@ class WorkflowEngine:
         return ready_steps
 
     def _execute_step(self, workflow: WorkflowInstance, step: WorkflowStep):
-        """Execute a single workflow step"""
+        """Execute a single workflow step."""
         step.status = StepStatus.RUNNING
         step.started_at = time.time()
 
-        emit_event(
+        self.queue.publish(
             f"workflow.step.{step.step_type}.started",
             {
                 "workflow_id": workflow.workflow_id,
@@ -327,22 +307,19 @@ class WorkflowEngine:
         )
 
         try:
-            # Get step processor
             processor = self.step_processors.get(step.step_type)
             if not processor:
                 raise ValueError(f"No processor for step type: {step.step_type}")
 
-            # Execute step
             result = processor(workflow, step)
 
-            # Mark step as completed
             step.status = StepStatus.COMPLETED
             step.completed_at = time.time()
             step.result = result
 
             duration = step.completed_at - step.started_at
 
-            emit_event(
+            self.queue.publish(
                 f"workflow.step.{step.step_type}.completed",
                 {
                     "workflow_id": workflow.workflow_id,
@@ -357,16 +334,15 @@ class WorkflowEngine:
             self._fail_step(workflow, step, str(e))
 
     def _fail_step(self, workflow: WorkflowInstance, step: WorkflowStep, error: str):
-        """Handle step failure"""
+        """Handle step failure."""
         step.retry_count += 1
         step.error = error
 
         if step.retry_count <= step.max_retries:
-            # Retry the step
             step.status = StepStatus.PENDING
             step.started_at = None
 
-            emit_event(
+            self.queue.publish(
                 f"workflow.step.{step.step_type}.retrying",
                 {
                     "workflow_id": workflow.workflow_id,
@@ -377,11 +353,10 @@ class WorkflowEngine:
                 },
             )
         else:
-            # Step has failed permanently
             step.status = StepStatus.FAILED
             step.completed_at = time.time()
 
-            emit_event(
+            self.queue.publish(
                 f"workflow.step.{step.step_type}.failed",
                 {
                     "workflow_id": workflow.workflow_id,
@@ -391,18 +366,17 @@ class WorkflowEngine:
                 },
             )
 
-            # Fail the entire workflow
             self._fail_workflow(workflow, f"Step {step.step_id} failed: {error}")
 
     def _is_workflow_complete(self, workflow: WorkflowInstance) -> bool:
-        """Check if workflow is complete"""
+        """Check if workflow is complete."""
         for step in workflow.steps.values():
             if step.status in [StepStatus.PENDING, StepStatus.RUNNING]:
                 return False
         return True
 
     def _complete_workflow(self, workflow: WorkflowInstance):
-        """Mark workflow as completed"""
+        """Mark workflow as completed."""
         workflow.status = WorkflowStatus.COMPLETED
         workflow.completed_at = time.time()
         self.running_workflows[workflow.workflow_id] = False
@@ -412,7 +386,7 @@ class WorkflowEngine:
             1 for step in workflow.steps.values() if step.status == StepStatus.COMPLETED
         )
 
-        emit_event(
+        self.queue.publish(
             f"workflow.{workflow.workflow_name}.completed",
             {
                 "workflow_id": workflow.workflow_id,
@@ -424,7 +398,7 @@ class WorkflowEngine:
         )
 
     def _fail_workflow(self, workflow: WorkflowInstance, error: str):
-        """Mark workflow as failed"""
+        """Mark workflow as failed."""
         workflow.status = WorkflowStatus.FAILED
         workflow.completed_at = time.time()
         self.running_workflows[workflow.workflow_id] = False
@@ -435,7 +409,7 @@ class WorkflowEngine:
                 failed_step = step.step_id
                 break
 
-        emit_event(
+        self.queue.publish(
             f"workflow.{workflow.workflow_name}.failed",
             {
                 "workflow_id": workflow.workflow_id,
@@ -449,16 +423,14 @@ class WorkflowEngine:
     def _process_http_request_step(
         self, workflow: WorkflowInstance, step: WorkflowStep
     ) -> Dict[str, Any]:
-        """Process HTTP request step"""
+        """Process HTTP request step."""
         url = step.config.get("url", "https://api.example.com/data")
         method = step.config.get("method", "GET")
 
-        # Simulate HTTP request
         request_time = random.uniform(0.1, 0.5)
         time.sleep(request_time)
 
-        # Simulate occasional failures
-        if random.random() < 0.1:  # 10% failure rate
+        if random.random() < 0.1:
             raise Exception(f"HTTP {method} request to {url} failed: timeout")
 
         return {
@@ -470,15 +442,10 @@ class WorkflowEngine:
     def _process_data_validation_step(
         self, workflow: WorkflowInstance, step: WorkflowStep
     ) -> Dict[str, Any]:
-        """Process data validation step"""
-        schema = step.config.get("schema", {})
-        data_source = step.config.get("data_source", "previous_step")
-
-        # Simulate validation processing
+        """Process data validation step."""
         time.sleep(random.uniform(0.05, 0.2))
 
-        # Simulate validation results
-        is_valid = random.random() > 0.15  # 85% validation success rate
+        is_valid = random.random() > 0.15
 
         if not is_valid:
             raise Exception("Data validation failed: missing required fields")
@@ -492,12 +459,11 @@ class WorkflowEngine:
     def _process_transformation_step(
         self, workflow: WorkflowInstance, step: WorkflowStep
     ) -> Dict[str, Any]:
-        """Process data transformation step"""
+        """Process data transformation step."""
         transformation_type = step.config.get("type", "map")
         input_format = step.config.get("input_format", "json")
         output_format = step.config.get("output_format", "json")
 
-        # Simulate transformation work
         time.sleep(random.uniform(0.1, 0.4))
 
         return {
@@ -505,17 +471,15 @@ class WorkflowEngine:
             "input_format": input_format,
             "output_format": output_format,
             "records_transformed": random.randint(50, 500),
-            "transformation_time": random.uniform(0.1, 0.4),
         }
 
     def _process_notification_step(
         self, workflow: WorkflowInstance, step: WorkflowStep
     ) -> Dict[str, Any]:
-        """Process notification step"""
+        """Process notification step."""
         notification_type = step.config.get("type", "email")
         recipients = step.config.get("recipients", [])
 
-        # Simulate notification sending
         time.sleep(random.uniform(0.05, 0.15))
 
         return {
@@ -528,15 +492,12 @@ class WorkflowEngine:
     def _process_approval_step(
         self, workflow: WorkflowInstance, step: WorkflowStep
     ) -> Dict[str, Any]:
-        """Process approval step (simulated auto-approval)"""
+        """Process approval step (simulated auto-approval)."""
         approver = step.config.get("approver", "system")
-        approval_timeout = step.config.get("timeout", 300)
 
-        # Simulate approval process
         time.sleep(random.uniform(0.1, 0.3))
 
-        # Simulate approval decision
-        approved = random.random() > 0.2  # 80% approval rate
+        approved = random.random() > 0.2
 
         if not approved:
             raise Exception(f"Approval denied by {approver}")
@@ -551,14 +512,12 @@ class WorkflowEngine:
     def _process_condition_step(
         self, workflow: WorkflowInstance, step: WorkflowStep
     ) -> Dict[str, Any]:
-        """Process conditional logic step"""
+        """Process conditional logic step."""
         condition_expr = step.config.get("condition", "true")
         context_var = step.config.get("context_variable", "status")
 
-        # Simulate condition evaluation
         time.sleep(random.uniform(0.01, 0.05))
 
-        # Simple condition evaluation (in real system, this would be more sophisticated)
         context_value = workflow.context.get(context_var, None)
         result = (
             bool(context_value)
@@ -566,7 +525,7 @@ class WorkflowEngine:
             else random.choice([True, False])
         )
 
-        emit_event(
+        self.queue.publish(
             f"condition.{step.step_type}.evaluated",
             {
                 "condition_id": step.step_id,
@@ -586,23 +545,17 @@ class WorkflowEngine:
     def _process_delay_step(
         self, workflow: WorkflowInstance, step: WorkflowStep
     ) -> Dict[str, Any]:
-        """Process delay step"""
+        """Process delay step."""
         delay_seconds = step.config.get("delay_seconds", 1.0)
-
-        # Actual delay
         time.sleep(delay_seconds)
-
         return {"delay_duration": delay_seconds, "completed_at": time.time()}
 
     def _process_parallel_branch_step(
         self, workflow: WorkflowInstance, step: WorkflowStep
     ) -> Dict[str, Any]:
-        """Process parallel branch step"""
+        """Process parallel branch step."""
         branch_count = step.config.get("branches", 2)
-
-        # Simulate parallel processing
         time.sleep(random.uniform(0.2, 0.6))
-
         return {
             "branches_executed": branch_count,
             "parallel_execution": True,
@@ -611,9 +564,8 @@ class WorkflowEngine:
 
 
 def create_sample_workflows() -> List[Dict[str, Any]]:
-    """Create sample workflow definitions"""
+    """Create sample workflow definitions."""
 
-    # Data processing workflow
     data_workflow = {
         "name": "data_processing",
         "steps": [
@@ -631,10 +583,7 @@ def create_sample_workflows() -> List[Dict[str, Any]]:
                 "step_id": "validate_data",
                 "step_type": "data_validation",
                 "name": "Validate Data Quality",
-                "config": {
-                    "schema": {"required": ["id", "value"]},
-                    "data_source": "fetch_data",
-                },
+                "config": {"schema": {"required": ["id", "value"]}},
                 "dependencies": ["fetch_data"],
             },
             {
@@ -668,7 +617,6 @@ def create_sample_workflows() -> List[Dict[str, Any]]:
         ],
     }
 
-    # Order processing workflow
     order_workflow = {
         "name": "order_processing",
         "steps": [
@@ -717,7 +665,6 @@ def create_sample_workflows() -> List[Dict[str, Any]]:
         ],
     }
 
-    # System maintenance workflow
     maintenance_workflow = {
         "name": "system_maintenance",
         "steps": [
@@ -742,7 +689,7 @@ def create_sample_workflows() -> List[Dict[str, Any]]:
                 "step_id": "wait_period",
                 "step_type": "delay",
                 "name": "Wait for Maintenance Window",
-                "config": {"delay_seconds": 2.0},
+                "config": {"delay_seconds": 0.5},
                 "dependencies": ["notify_downtime"],
             },
             {
@@ -756,11 +703,7 @@ def create_sample_workflows() -> List[Dict[str, Any]]:
                 "step_id": "apply_updates",
                 "step_type": "transformation",
                 "name": "Apply System Updates",
-                "config": {
-                    "type": "system_update",
-                    "input_format": "package",
-                    "output_format": "installed",
-                },
+                "config": {"type": "system_update"},
                 "dependencies": ["backup_data"],
             },
             {
@@ -784,140 +727,121 @@ def create_sample_workflows() -> List[Dict[str, Any]]:
 
 
 def main():
-    """Demo event-driven workflow engine"""
-    print("🎭 Event-Driven Workflow Engine")
+    """Demo event-driven workflow engine."""
+    print("Event-Driven Workflow Engine")
     print("=" * 50)
 
+    # Create message queue and executor
+    queue = MessageQueue()
+    executor = Executor(mode=ExecutionMode.THREAD, max_workers=6)
+
     # Create workflow engine
-    engine = WorkflowEngine("main_engine")
+    engine = WorkflowEngine("main_engine", queue)
 
     # Create sample workflows
     workflow_definitions = create_sample_workflows()
 
-    with execution_session() as manager:
-        # Configure for mixed I/O and CPU workload
-        manager.configure().max_threads(6).execution_mode(ExecutionMode.HYBRID).apply()
+    print("Creating and starting workflows...")
 
-        print("🔄 Creating and starting workflows...")
-
-        # Create workflow instances
-        workflow_ids = []
-        for workflow_def in workflow_definitions:
-            workflow_id = engine.create_workflow(
-                workflow_def["name"], workflow_def["steps"]
-            )
-            workflow_ids.append((workflow_id, workflow_def["name"]))
-
-        print(f"   Created {len(workflow_ids)} workflow instances")
-
-        # Start workflows with different triggers and contexts
-        for workflow_id, workflow_name in workflow_ids:
-            trigger = "scheduled" if "maintenance" in workflow_name else "api_request"
-            context = {
-                "environment": "production",
-                "quality": random.uniform(0.7, 0.95),
-                "load": random.uniform(0.1, 0.8),
-                "user_id": f"user_{random.randint(1000, 9999)}",
-            }
-
-            engine.start_workflow(workflow_id, trigger, context)
-
-        # Execute workflows in parallel
-        print(f"\n🚀 Executing workflows in parallel...")
-
-        start_time = time.time()
-        execution_results = manager.parallel(
-            *[
-                lambda wf_id=wf_id: engine.execute_workflow(wf_id)
-                for wf_id, _ in workflow_ids
-            ]
+    # Create workflow instances
+    workflow_ids = []
+    for workflow_def in workflow_definitions:
+        workflow_id = engine.create_workflow(
+            workflow_def["name"], workflow_def["steps"]
         )
-        total_execution_time = time.time() - start_time
+        workflow_ids.append((workflow_id, workflow_def["name"]))
 
-        # Analyze workflow execution results
-        print(f"\n📊 Workflow Execution Summary:")
+    print(f"Created {len(workflow_ids)} workflow instances\n")
 
-        successful_workflows = 0
-        failed_workflows = 0
-        total_steps_completed = 0
-        total_workflow_time = 0
+    # Start workflows with different triggers and contexts
+    for workflow_id, workflow_name in workflow_ids:
+        trigger = "scheduled" if "maintenance" in workflow_name else "api_request"
+        context = {
+            "environment": "production",
+            "quality": random.uniform(0.7, 0.95),
+            "load": random.uniform(0.1, 0.8),
+            "user_id": f"user_{random.randint(1000, 9999)}",
+        }
+        engine.start_workflow(workflow_id, trigger, context)
 
-        for (workflow_id, workflow_name), success in zip(
-            workflow_ids, execution_results
-        ):
-            workflow = engine.workflows[workflow_id]
+    # Execute workflows using executor
+    print("\nExecuting workflows in parallel...")
+    start_time = time.time()
 
-            if workflow.status == WorkflowStatus.COMPLETED:
-                successful_workflows += 1
-                workflow_duration = workflow.completed_at - workflow.started_at
-                total_workflow_time += workflow_duration
+    with executor:
+        task_ids = []
+        for wf_id, _ in workflow_ids:
+            task_id = executor.submit(engine.execute_workflow, wf_id)
+            task_ids.append(task_id)
 
-                completed_steps = sum(
-                    1
-                    for step in workflow.steps.values()
-                    if step.status == StepStatus.COMPLETED
-                )
-                total_steps_completed += completed_steps
+        results = [executor.result(tid) for tid in task_ids]
 
-                print(
-                    f"   ✅ {workflow_name}: {completed_steps} steps in {workflow_duration:.2f}s"
-                )
-            else:
-                failed_workflows += 1
-                print(f"   ❌ {workflow_name}: {workflow.status.value}")
+    total_execution_time = time.time() - start_time
 
-        print(f"\n📈 Overall Statistics:")
-        print(f"   Successful workflows: {successful_workflows}/{len(workflow_ids)}")
-        print(f"   Failed workflows: {failed_workflows}")
-        print(f"   Total steps completed: {total_steps_completed}")
-        print(f"   Total execution time: {total_execution_time:.2f}s")
+    # Analyze results
+    print(f"\n{'=' * 50}")
+    print("Workflow Execution Summary:")
 
-        if successful_workflows > 0:
-            avg_workflow_time = total_workflow_time / successful_workflows
-            print(f"   Average workflow duration: {avg_workflow_time:.2f}s")
+    successful_workflows = 0
+    failed_workflows = 0
+    total_steps_completed = 0
 
-        # Show step type statistics
-        step_type_stats = {}
-        for workflow in engine.workflows.values():
-            for step in workflow.steps.values():
-                step_type = step.step_type
-                if step_type not in step_type_stats:
-                    step_type_stats[step_type] = {
-                        "completed": 0,
-                        "failed": 0,
-                        "total": 0,
-                    }
+    for (workflow_id, workflow_name), result in zip(workflow_ids, results):
+        workflow = engine.workflows[workflow_id]
 
-                step_type_stats[step_type]["total"] += 1
-                if step.status == StepStatus.COMPLETED:
-                    step_type_stats[step_type]["completed"] += 1
-                elif step.status == StepStatus.FAILED:
-                    step_type_stats[step_type]["failed"] += 1
+        if workflow.status == WorkflowStatus.COMPLETED:
+            successful_workflows += 1
+            workflow_duration = workflow.completed_at - workflow.started_at
 
-        print(f"\n📋 Step Type Performance:")
-        for step_type, stats in step_type_stats.items():
-            success_rate = (
-                (stats["completed"] / stats["total"] * 100) if stats["total"] > 0 else 0
+            completed_steps = sum(
+                1
+                for step in workflow.steps.values()
+                if step.status == StepStatus.COMPLETED
             )
+            total_steps_completed += completed_steps
+
             print(
-                f"   {step_type}: {stats['completed']}/{stats['total']} completed "
-                f"({success_rate:.1f}% success rate)"
+                f"  [OK] {workflow_name}: {completed_steps} steps in {workflow_duration:.2f}s"
             )
+        else:
+            failed_workflows += 1
+            print(f"  [FAIL] {workflow_name}: {workflow.status.value}")
 
-        # Show system performance
-        metrics = manager.get_metrics()
-        print(f"\n🖥️ System Performance:")
-        print(f"   Workflow executions: {metrics['tasks_completed']}")
-        print(f"   Workflow events: {metrics['events_published']}")
-        print(f"   System health: {manager.health_check()}")
+    print(f"\nOverall Statistics:")
+    print(f"  Successful workflows: {successful_workflows}/{len(workflow_ids)}")
+    print(f"  Failed workflows: {failed_workflows}")
+    print(f"  Total steps completed: {total_steps_completed}")
+    print(f"  Total execution time: {total_execution_time:.2f}s")
 
-        print(f"\n🎯 Workflow Engine demonstrates:")
-        print(f"   ✅ Event-driven step orchestration")
-        print(f"   ✅ Dependency-based execution order")
-        print(f"   ✅ Parallel workflow execution")
-        print(f"   ✅ Step retry and error handling")
-        print(f"   ✅ Conditional logic and branching")
-        print(f"   ✅ Real-time workflow monitoring")
+    # Step type statistics
+    step_type_stats: Dict[str, Dict[str, int]] = {}
+    for workflow in engine.workflows.values():
+        for step in workflow.steps.values():
+            step_type = step.step_type
+            if step_type not in step_type_stats:
+                step_type_stats[step_type] = {"completed": 0, "failed": 0, "total": 0}
+
+            step_type_stats[step_type]["total"] += 1
+            if step.status == StepStatus.COMPLETED:
+                step_type_stats[step_type]["completed"] += 1
+            elif step.status == StepStatus.FAILED:
+                step_type_stats[step_type]["failed"] += 1
+
+    print(f"\nStep Type Performance:")
+    for step_type, stats in step_type_stats.items():
+        success_rate = (
+            (stats["completed"] / stats["total"] * 100) if stats["total"] > 0 else 0
+        )
+        print(
+            f"  {step_type}: {stats['completed']}/{stats['total']} ({success_rate:.0f}% success)"
+        )
+
+    print(f"\nWorkflow Engine demonstrates:")
+    print(f"  - Event-driven step orchestration via MessageQueue")
+    print(f"  - Dependency-based execution order")
+    print(f"  - Parallel workflow execution with Executor")
+    print(f"  - Step retry and error handling")
+    print(f"  - Conditional logic and branching")
 
 
 if __name__ == "__main__":

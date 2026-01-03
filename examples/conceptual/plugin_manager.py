@@ -1,185 +1,176 @@
 #!/usr/bin/env python3
 """
-Level 3 Execution Manager - Comprehensive Test
-Tests all global functions: run_parallel, emit_event, on_event
+Plugin Manager - Conceptual Example
+Demonstrates extensible plugin architecture using observers and message queue.
 """
 
-import time
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List
 
-from callpyback import ExecutionMode, emit_event, on_event, execution_session, run_parallel
-
-
-# Global event handlers using decorators
-@on_event("task.completed")
-def handle_task_completion(message):
-    print(f"✅ Task completed: {message.payload}")
-
-
-@on_event("user.*")  # Pattern matching
-def handle_user_events(message):
-    print(f"👤 User event {message.topic}: {message.payload}")
+from callpyback import (
+    ExecutionContext,
+    MessageQueue,
+    Observer,
+    TimingObserver,
+    observe,
+)
 
 
-@on_event("system.error", priority=None, once=False)
-def handle_system_errors(message):
-    print(f"❌ System error: {message.payload}")
+class Plugin(ABC):
+    """Base plugin interface."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        pass
+
+    @abstractmethod
+    def initialize(self, queue: MessageQueue) -> None:
+        pass
+
+    @abstractmethod
+    def shutdown(self) -> None:
+        pass
 
 
-def cpu_task(n: int) -> int:
-    """Simulate CPU work"""
-    return sum(range(n))
+class PluginObserver(Observer):
+    """Observer that notifies plugins of execution events."""
+
+    def __init__(self, queue: MessageQueue):
+        self.queue = queue
+
+    def on_start(self, ctx: ExecutionContext) -> None:
+        self.queue.publish(
+            "plugin.execution.start",
+            {"func_name": ctx.func_name, "args": str(ctx.args)},
+        )
+
+    def on_end(self, ctx: ExecutionContext) -> None:
+        self.queue.publish(
+            "plugin.execution.end",
+            {
+                "func_name": ctx.func_name,
+                "success": ctx.is_success,
+                "execution_time": ctx.execution_time,
+            },
+        )
 
 
-def io_task(delay: float) -> str:
-    """Simulate I/O work"""
-    time.sleep(delay)
-    return f"IO completed after {delay}s"
+class LoggingPlugin(Plugin):
+    """Plugin that logs all events."""
+
+    @property
+    def name(self) -> str:
+        return "logging"
+
+    def initialize(self, queue: MessageQueue) -> None:
+        self.queue = queue
+
+        @queue.on("plugin.execution.start")
+        def on_start(msg):
+            print(f"[LOG] Starting: {msg.payload['func_name']}")
+
+        @queue.on("plugin.execution.end")
+        def on_end(msg):
+            status = "OK" if msg.payload["success"] else "FAILED"
+            print(f"[LOG] Finished: {msg.payload['func_name']} [{status}]")
+
+    def shutdown(self) -> None:
+        print("[LOG] Logging plugin shutdown")
+
+
+class MetricsPlugin(Plugin):
+    """Plugin that collects metrics."""
+
+    def __init__(self):
+        self.call_counts: Dict[str, int] = {}
+        self.total_time: Dict[str, float] = {}
+
+    @property
+    def name(self) -> str:
+        return "metrics"
+
+    def initialize(self, queue: MessageQueue) -> None:
+        self.queue = queue
+
+        @queue.on("plugin.execution.end")
+        def on_end(msg):
+            func_name = msg.payload["func_name"]
+            exec_time = msg.payload["execution_time"]
+
+            self.call_counts[func_name] = self.call_counts.get(func_name, 0) + 1
+            self.total_time[func_name] = self.total_time.get(func_name, 0) + exec_time
+
+    def shutdown(self) -> None:
+        print(f"[METRICS] Call counts: {self.call_counts}")
+        print(f"[METRICS] Total time: {self.total_time}")
+
+    def get_stats(self) -> Dict[str, Any]:
+        return {
+            "call_counts": self.call_counts.copy(),
+            "total_time": self.total_time.copy(),
+        }
+
+
+class PluginManager:
+    """Manages plugin lifecycle."""
+
+    def __init__(self):
+        self.queue = MessageQueue()
+        self.plugins: List[Plugin] = []
+        self.observer = PluginObserver(self.queue)
+
+    def register(self, plugin: Plugin) -> None:
+        plugin.initialize(self.queue)
+        self.plugins.append(plugin)
+        print(f"Registered plugin: {plugin.name}")
+
+    def shutdown(self) -> None:
+        for plugin in self.plugins:
+            plugin.shutdown()
+        self.queue.close()
+
+    def get_observer(self) -> Observer:
+        return self.observer
 
 
 def main():
-    print("🚀 CallPyBack Level 3 Execution Manager - Comprehensive Test")
-    print("=" * 60)
+    # Create plugin manager
+    manager = PluginManager()
 
-    # Test 1: Context manager (this was working)
-    print("\n1️⃣ Testing Context Manager:")
-    with execution_session() as manager:
-        manager.configure().max_threads(4).execution_mode(ExecutionMode.HYBRID).apply()
+    # Register plugins
+    logging_plugin = LoggingPlugin()
+    metrics_plugin = MetricsPlugin()
 
-        results = manager.parallel(
-            lambda: cpu_task(1000),
-            lambda: io_task(0.1),
-            lambda: cpu_task(2000),
-            lambda: io_task(0.2),
-        )
+    manager.register(logging_plugin)
+    manager.register(metrics_plugin)
 
-        print(f"   Results: {results}")
+    # Create functions with plugin observer
+    timing = TimingObserver()
 
-        # Test events within context
-        manager.emit("task.completed", {"task_id": "context_task", "result": "success"})
+    @observe(manager.get_observer(), timing)
+    def process_data(data: str) -> str:
+        return data.upper()
 
-        metrics = manager.get_metrics()
-        print(f"   Tasks completed: {metrics['tasks_completed']}")
+    @observe(manager.get_observer(), timing)
+    def calculate(x: int, y: int) -> int:
+        return x + y
 
-    # Give time for events to process
-    time.sleep(0.1)
+    # Execute functions
+    print("\n=== Executing Functions ===")
+    process_data("hello")
+    process_data("world")
+    calculate(1, 2)
+    calculate(3, 4)
+    calculate(5, 6)
 
-    # Test 2: Global run_parallel function
-    print("\n2️⃣ Testing Global run_parallel:")
-    try:
-        global_results = run_parallel(
-            lambda: cpu_task(500), lambda: io_task(0.05), lambda: cpu_task(300)
-        )
-        print(f"   Global parallel results: {global_results}")
-    except Exception as e:
-        print(f"   ❌ Global run_parallel failed: {e}")
+    # Show metrics
+    print("\n=== Plugin Stats ===")
+    print(f"Timing: {timing.stats}")
 
-    # Test 3: Global emit_event function
-    print("\n3️⃣ Testing Global emit_event:")
-    try:
-        # Test basic event
-        event_id1 = emit_event(
-            "task.completed", {"task_id": "global_task_1", "status": "done"}
-        )
-        print(f"   Emitted event 1: {event_id1}")
-
-        # Test pattern-matched events
-        event_id2 = emit_event(
-            "user.login", {"user_id": "john_doe", "timestamp": time.time()}
-        )
-        print(f"   Emitted event 2: {event_id2}")
-
-        event_id3 = emit_event(
-            "user.logout", {"user_id": "john_doe", "session_duration": 3600}
-        )
-        print(f"   Emitted event 3: {event_id3}")
-
-        # Test error event
-        event_id4 = emit_event(
-            "system.error", {"error_code": 500, "message": "Test error"}
-        )
-        print(f"   Emitted event 4: {event_id4}")
-
-    except Exception as e:
-        print(f"   ❌ Global emit_event failed: {e}")
-
-    # Give time for events to process
-    time.sleep(0.2)
-
-    # Test 4: Combined usage - parallel execution + events
-    print("\n4️⃣ Testing Combined Usage (Parallel + Events):")
-    try:
-        # Function that emits events
-        def task_with_events(task_id: str) -> str:
-            emit_event("task.started", {"task_id": task_id})
-
-            # Do some work
-            result = cpu_task(200)
-
-            emit_event("task.completed", {"task_id": task_id, "result": result})
-            return f"Task {task_id} completed with result {result}"
-
-        # Run multiple tasks in parallel, each emitting events
-        combined_results = run_parallel(
-            lambda: task_with_events("A"),
-            lambda: task_with_events("B"),
-            lambda: task_with_events("C"),
-        )
-
-        print(f"   Combined results: {combined_results}")
-
-    except Exception as e:
-        print(f"   ❌ Combined usage failed: {e}")
-
-    # Give time for final events to process
-    time.sleep(0.2)
-
-    # Test 5: Event registration after emission
-    print("\n5️⃣ Testing Late Event Registration:")
-    try:
-        # Emit events first
-        emit_event(
-            "late.test", {"message": "This was emitted before handler registration"}
-        )
-
-        # Register handler after emission (should not receive above event)
-        @on_event("late.test")
-        def handle_late_events(message):
-            print(f"🕐 Late handler received: {message.payload}")
-
-        # Emit again (should receive this one)
-        emit_event(
-            "late.test", {"message": "This was emitted after handler registration"}
-        )
-
-        time.sleep(0.1)
-
-    except Exception as e:
-        print(f"   ❌ Late registration test failed: {e}")
-
-    # Test 6: Performance test
-    print("\n6️⃣ Performance Test:")
-    try:
-        start_time = time.time()
-
-        # Run many small tasks
-        many_results = run_parallel(*[lambda i=i: i * 2 for i in range(10)])
-
-        end_time = time.time()
-
-        print(f"   Processed {len(many_results)} tasks in {end_time - start_time:.3f}s")
-        print(f"   Results: {many_results}")
-
-    except Exception as e:
-        print(f"   ❌ Performance test failed: {e}")
-
-    print("\n🎯 Test Summary:")
-    print("   - Context manager: ✅ (known working)")
-    print("   - Global run_parallel: Check output above")
-    print("   - Global emit_event: Check output above")
-    print("   - Event handlers: Check if events were received")
-    print("   - Combined usage: Check output above")
-
-    print("\n✅ Comprehensive test completed!")
+    # Shutdown
+    print("\n=== Shutdown ===")
+    manager.shutdown()
 
 
 if __name__ == "__main__":

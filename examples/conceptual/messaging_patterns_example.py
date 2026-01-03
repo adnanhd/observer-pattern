@@ -1,201 +1,108 @@
 #!/usr/bin/env python3
 """
-Messaging Patterns - Conceptual Example  
-Demonstrates request-response and pub-sub messaging patterns.
+Messaging Patterns - Conceptual Example
+Demonstrates pub-sub and request-reply messaging patterns.
 """
 
-import random
+import threading
 import time
 
-from callpyback import ExecutionMode, emit_event, on_event, execution_session
-
-
-# Service response handlers
-@on_event("service.*.request")
-def handle_service_requests(message):
-    """Handle incoming service requests"""
-    service = message.topic.split(".")[1]
-    request_id = message.payload.get("request_id", "unknown")
-    print(f"📥 {service} service received request: {request_id}")
-
-
-@on_event("service.*.response")
-def handle_service_responses(message):
-    """Handle service responses"""
-    service = message.topic.split(".")[1]
-    request_id = message.payload.get("request_id", "unknown")
-    status = message.payload.get("status", "unknown")
-    print(f"📤 {service} service responded: {request_id} - {status}")
-
-
-@on_event("monitor.*")
-def handle_monitoring_events(message):
-    """Monitor system events"""
-    event_type = message.topic.split(".")[1]
-    print(f"📊 Monitor: {event_type} - {message.payload}")
-
-
-def simulate_auth_service(request_id: str) -> dict:
-    """Simulate authentication service"""
-    emit_event(
-        "service.auth.request",
-        {
-            "request_id": request_id,
-            "user_id": f"user_{random.randint(1, 100)}",
-            "timestamp": time.time(),
-        },
-    )
-
-    # Simulate processing
-    time.sleep(random.uniform(0.1, 0.3))
-
-    # Random success/failure
-    success = random.random() > 0.2
-    status = "success" if success else "unauthorized"
-
-    result = {
-        "request_id": request_id,
-        "status": status,
-        "token": f"token_{request_id}" if success else None,
-        "expires_in": 3600 if success else 0,
-    }
-
-    emit_event("service.auth.response", result)
-
-    # Emit monitoring events
-    emit_event("monitor.auth_attempt", {"success": success, "request_id": request_id})
-
-    return result
-
-
-def simulate_data_service(request_id: str) -> dict:
-    """Simulate data retrieval service"""
-    emit_event(
-        "service.data.request",
-        {
-            "request_id": request_id,
-            "query": f"SELECT * FROM table WHERE id = {random.randint(1, 1000)}",
-            "timestamp": time.time(),
-        },
-    )
-
-    # Simulate database query
-    time.sleep(random.uniform(0.05, 0.25))
-
-    # Random data size
-    record_count = random.randint(0, 50)
-
-    result = {
-        "request_id": request_id,
-        "status": "success" if record_count > 0 else "not_found",
-        "record_count": record_count,
-        "data_size": record_count * random.randint(100, 500),
-    }
-
-    emit_event("service.data.response", result)
-
-    # Emit performance monitoring
-    emit_event(
-        "monitor.query_performance", {"records": record_count, "request_id": request_id}
-    )
-
-    return result
-
-
-def simulate_notification_service(request_id: str) -> dict:
-    """Simulate notification service"""
-    emit_event(
-        "service.notification.request",
-        {
-            "request_id": request_id,
-            "recipient": f"user_{random.randint(1, 100)}@example.com",
-            "type": random.choice(["email", "sms", "push"]),
-        },
-    )
-
-    # Simulate sending
-    time.sleep(random.uniform(0.2, 0.4))
-
-    # Usually successful
-    success = random.random() > 0.1
-
-    result = {
-        "request_id": request_id,
-        "status": "sent" if success else "failed",
-        "delivery_time": time.time(),
-        "attempts": 1 if success else random.randint(1, 3),
-    }
-
-    emit_event("service.notification.response", result)
-
-    emit_event(
-        "monitor.notification_sent", {"success": success, "request_id": request_id}
-    )
-
-    return result
+from callpyback import Executor, MessageQueue, RPCClient, RPCServer
 
 
 def main():
-    """Demonstrate messaging patterns"""
-    print("📡 Messaging Patterns Demo")
-    print("=" * 40)
+    queue = MessageQueue()
 
-    with execution_session() as manager:
-        # Configure for I/O intensive microservices
-        manager.configure().max_threads(6).execution_mode(ExecutionMode.THREAD).apply()
+    print("=== Pub-Sub Pattern ===")
 
-        print("\n🔄 Starting microservices simulation...")
+    # Multiple subscribers to same topic
+    received_by = {"handler1": [], "handler2": []}
 
-        # Generate request IDs
-        request_ids = [f"req_{i:03d}" for i in range(8)]
+    @queue.on("news.tech")
+    def tech_handler_1(msg):
+        received_by["handler1"].append(msg.payload)
+        print(f"Handler 1 received: {msg.payload['title']}")
 
-        # Run multiple services concurrently
-        print("🚀 Processing authentication requests...")
-        auth_results = manager.map_parallel(simulate_auth_service, request_ids[:4])
+    @queue.on("news.tech")
+    def tech_handler_2(msg):
+        received_by["handler2"].append(msg.payload)
+        print(f"Handler 2 received: {msg.payload['title']}")
 
-        print("\n🗄️ Processing data requests...")
-        data_results = manager.map_parallel(simulate_data_service, request_ids[2:6])
+    queue.publish(
+        "news.tech", {"title": "New Python Release", "category": "programming"}
+    )
+    queue.publish("news.tech", {"title": "New Python Release", "category": "programming"})
+    queue.publish("news.tech", {"title": "AI Breakthrough", "category": "ml"})
 
-        print("\n📧 Processing notification requests...")
-        notification_results = manager.map_parallel(
-            simulate_notification_service, request_ids[4:]
-        )
+    time.sleep(0.1)
 
-        # Aggregate results
-        all_results = {
-            "auth": auth_results,
-            "data": data_results,
-            "notifications": notification_results,
-        }
+    print(f"\nHandler 1 received {len(received_by['handler1'])} messages")
+    print(f"Handler 2 received {len(received_by['handler2'])} messages")
 
-        print(f"\n📊 Service Results Summary:")
-        for service, results in all_results.items():
-            successful = sum(
-                1 for r in results if r.get("status") in ["success", "sent"]
-            )
-            total = len(results)
-            success_rate = (successful / total * 100) if total > 0 else 0
-            print(f"   {service}: {successful}/{total} ({success_rate:.1f}% success)")
+    print("\n=== Request-Reply Pattern (RPC) ===")
 
-        # Emit system-wide events
-        emit_event(
-            "monitor.system_status",
-            {
-                "total_requests": len(request_ids),
-                "services_active": 3,
-                "timestamp": time.time(),
-            },
-        )
+    executor = Executor()
+    server = RPCServer(queue, executor, service_name="calculator")
 
-        # Show performance metrics
-        metrics = manager.get_metrics()
-        print(f"\n📈 System Metrics:")
-        print(f"   Events published: {metrics['events_published']}")
-        print(f"   Tasks completed: {metrics['tasks_completed']}")
-        print(f"   Health: {manager.health_check()}")
+    @server.register()
+    def add(a: int, b: int) -> int:
+        return a + b
 
-    time.sleep(0.1)  # Let final events process
-    print("\n✅ Messaging patterns demo completed!")
+    @server.register()
+    def multiply(a: int, b: int) -> int:
+        return a * b
+
+    @server.register()
+    def factorial(n: int) -> int:
+        if n <= 1:
+            return 1
+        result = 1
+        for i in range(2, n + 1):
+            result *= i
+        return result
+
+    # Start server in background
+    server.serve(blocking=False)
+    time.sleep(0.1)
+
+    # Create client
+    client = RPCClient(queue, service_name="calculator", timeout=5.0)
+
+    # Make RPC calls
+    print(f"add(5, 3) = {client.call('add', 5, 3)}")
+    print(f"multiply(4, 7) = {client.call('multiply', 4, 7)}")
+    print(f"factorial(5) = {client.call('factorial', 5)}")
+
+    # Dynamic method access
+    print(f"client.add(10, 20) = {client.add(10, 20)}")
+
+    server.stop()
+
+    print("\n=== Fan-Out Pattern ===")
+
+    results = []
+
+    @queue.on("task.result")
+    def collect_results(msg):
+        results.append(msg.payload)
+
+    # Simulate fan-out: one message triggers multiple handlers
+    @queue.on("job.start")
+    def worker_1(msg):
+        time.sleep(0.01)
+        queue.publish("task.result", {"worker": 1, "job_id": msg.payload["id"]})
+
+    @queue.on("job.start")
+    def worker_2(msg):
+        time.sleep(0.01)
+        queue.publish("task.result", {"worker": 2, "job_id": msg.payload["id"]})
+
+    queue.publish("job.start", {"id": "JOB-001"})
+
+    time.sleep(0.1)
+    print(f"Collected {len(results)} results from workers")
+
+    print("\nDone!")
 
 
 if __name__ == "__main__":
