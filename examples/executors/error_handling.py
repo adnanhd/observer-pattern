@@ -3,20 +3,13 @@
 Error Handling Examples
 
 This example demonstrates error handling patterns when using CallPyBack
-executors, including exception handling, retries, timeouts, and
-graceful degradation.
+executors, including exception handling, timeouts, and graceful degradation.
 """
 
 import random
 import time
-from typing import Optional
 
-from callpyback import (
-    ProcessExecutor,
-    TaskResult,
-    TaskStatus,
-    ThreadExecutor,
-)
+from callpyback import ExecutionMode, Executor, TaskResult, TaskStatus
 
 # ============================================================================
 # Helper Functions
@@ -63,7 +56,7 @@ def basic_exception_handling():
     print("Example 1: Basic Exception Handling")
     print("=" * 60)
 
-    with ThreadExecutor(max_workers=2) as executor:
+    with Executor(mode=ExecutionMode.THREAD, max_workers=2) as executor:
         # Submit tasks that may fail
         tasks = [
             ("valid", executor.submit(division, 10, 2)),
@@ -72,12 +65,12 @@ def basic_exception_handling():
         ]
 
         for name, task_id in tasks:
-            result = executor.get_result(task_id, timeout=5.0)
+            result = executor.result(task_id, timeout=5.0)
 
             if result.is_success:
                 print(f"  {name}: SUCCESS - {result.value}")
             else:
-                print(f"  {name}: FAILED - {type(result.exception).__name__}")
+                print(f"  {name}: FAILED - {result.error_type}: {result.error}")
 
 
 # ============================================================================
@@ -98,50 +91,56 @@ def exception_type_handling():
         "not a dict",  # TypeError
     ]
 
-    with ThreadExecutor(max_workers=2) as executor:
+    with Executor(mode=ExecutionMode.THREAD, max_workers=2) as executor:
         task_ids = [executor.submit(validate_and_process, data) for data in test_cases]
 
         for i, task_id in enumerate(task_ids):
-            result = executor.get_result(task_id, timeout=5.0)
+            result = executor.result(task_id, timeout=5.0)
 
             if result.is_success:
                 print(f"  Case {i + 1}: SUCCESS - {result.value}")
             else:
-                exc = result.exception
-                exc_type = type(exc).__name__
-                print(f"  Case {i + 1}: {exc_type} - {exc}")
+                print(f"  Case {i + 1}: {result.error_type} - {result.error}")
 
 
 # ============================================================================
-# Example 3: Retry Pattern
+# Example 3: Retry Pattern (Manual)
 # ============================================================================
 
 
 def retry_pattern():
-    """Demonstrate retry pattern for flaky operations."""
+    """Demonstrate manual retry pattern for flaky operations."""
     print("\n" + "=" * 60)
-    print("Example 3: Retry Pattern")
+    print("Example 3: Manual Retry Pattern")
     print("=" * 60)
 
-    def flaky_with_tracking():
-        """Flaky operation with attempt tracking."""
-        flaky_with_tracking.attempts = getattr(flaky_with_tracking, "attempts", 0) + 1
-        if flaky_with_tracking.attempts < 3:
-            raise ConnectionError(f"Attempt {flaky_with_tracking.attempts} failed")
-        return f"Succeeded on attempt {flaky_with_tracking.attempts}"
+    def execute_with_retry(executor, func, *args, max_retries=3, **kwargs):
+        """Execute a function with retries."""
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            task_id = executor.submit(func, *args, **kwargs)
+            result = executor.result(task_id, timeout=5.0)
 
-    # Reset counter
-    flaky_with_tracking.attempts = 0
+            if result.is_success:
+                return result.value, attempt
 
-    with ThreadExecutor(max_workers=1) as executor:
-        # Submit with retries
-        task_id = executor.submit(flaky_with_tracking, max_retries=5)
-        result = executor.get_result(task_id, timeout=10.0)
+            last_error = result.error
+            print(f"    Attempt {attempt} failed: {last_error}")
 
-        if result.is_success:
-            print(f"  Result: {result.value}")
-        else:
-            print(f"  Failed after retries: {result.exception}")
+        raise Exception(f"All {max_retries} attempts failed. Last error: {last_error}")
+
+    with Executor(mode=ExecutionMode.THREAD, max_workers=1) as executor:
+        # Try a flaky operation with retries
+        try:
+            result, attempts = execute_with_retry(
+                executor,
+                flaky_operation,
+                0.4,  # 40% success rate
+                max_retries=5,
+            )
+            print(f"  Result: {result} (succeeded on attempt {attempts})")
+        except Exception as e:
+            print(f"  Failed: {e}")
 
 
 # ============================================================================
@@ -155,7 +154,7 @@ def timeout_handling():
     print("Example 4: Timeout Handling")
     print("=" * 60)
 
-    with ThreadExecutor(max_workers=2) as executor:
+    with Executor(mode=ExecutionMode.THREAD, max_workers=2) as executor:
         # Fast task
         fast_task = executor.submit(slow_operation, 0.1)
 
@@ -163,19 +162,16 @@ def timeout_handling():
         slow_task = executor.submit(slow_operation, 10.0)
 
         # Get fast task result
-        fast_result = executor.get_result(fast_task, timeout=5.0)
+        fast_result = executor.result(fast_task, timeout=5.0)
         print(f"  Fast task: {fast_result.value}")
 
-        # Try to get slow task result with timeout
+        # Try to get slow task result with short timeout
         try:
-            slow_result = executor.get_result(slow_task, timeout=0.5)
+            slow_result = executor.result(slow_task, timeout=0.5)
             print(f"  Slow task: {slow_result.value}")
         except TimeoutError:
             print("  Slow task: TIMEOUT - Task is still running")
-
-            # Cancel the slow task
-            cancelled = executor.cancel(slow_task)
-            print(f"  Cancelled: {cancelled}")
+            print("  (Task will complete in background when executor closes)")
 
 
 # ============================================================================
@@ -189,17 +185,17 @@ def graceful_degradation():
     print("Example 5: Graceful Degradation")
     print("=" * 60)
 
-    def fetch_with_fallback(primary_url: str, fallback_value: str) -> str:
-        """Fetch with fallback on failure."""
-        # Simulate primary source failure
-        if "primary" in primary_url:
+    def fetch_data(url: str) -> str:
+        """Fetch data, may fail for primary sources."""
+        time.sleep(0.05)  # Simulate network
+        if "primary" in url:
             raise ConnectionError("Primary source unavailable")
-        return f"Data from {primary_url}"
+        return f"Data from {url}"
 
     def get_data_with_fallback(executor, url: str, default: str) -> str:
         """Get data with graceful fallback."""
-        task_id = executor.submit(fetch_with_fallback, url, default)
-        result = executor.get_result(task_id, timeout=5.0)
+        task_id = executor.submit(fetch_data, url)
+        result = executor.result(task_id, timeout=5.0)
 
         if result.is_success:
             return result.value
@@ -207,7 +203,7 @@ def graceful_degradation():
             print(f"    Warning: {url} failed, using fallback")
             return default
 
-    with ThreadExecutor(max_workers=2) as executor:
+    with Executor(mode=ExecutionMode.THREAD, max_workers=2) as executor:
         # Try primary sources with fallbacks
         sources = [
             ("primary-api.example.com", "cached_data_1"),
@@ -215,10 +211,8 @@ def graceful_degradation():
             ("primary-backup.example.com", "cached_data_3"),
         ]
 
-        results = []
         for url, fallback in sources:
             data = get_data_with_fallback(executor, url, fallback)
-            results.append(data)
             print(f"  {url}: {data}")
 
 
@@ -235,25 +229,26 @@ def comprehensive_status_handling():
 
     def handle_result(result: TaskResult) -> str:
         """Handle task result based on status."""
-        match result.status:
-            case TaskStatus.COMPLETED:
-                return f"SUCCESS: {result.value}"
-            case TaskStatus.FAILED:
-                return f"FAILED: {type(result.exception).__name__}"
-            case TaskStatus.TIMEOUT:
-                return "TIMEOUT: Operation took too long"
-            case TaskStatus.CANCELLED:
-                return "CANCELLED: Operation was cancelled"
-            case _:
-                return f"UNKNOWN: {result.status}"
+        if result.status == TaskStatus.COMPLETED:
+            return f"SUCCESS: {result.value}"
+        elif result.status == TaskStatus.FAILED:
+            return f"FAILED: {result.error_type} - {result.error}"
+        elif result.status == TaskStatus.CANCELLED:
+            return "CANCELLED: Operation was cancelled"
+        elif result.status == TaskStatus.RUNNING:
+            return "RUNNING: Still in progress"
+        elif result.status == TaskStatus.PENDING:
+            return "PENDING: Not yet started"
+        else:
+            return f"UNKNOWN: {result.status}"
 
-    with ThreadExecutor(max_workers=2) as executor:
+    with Executor(mode=ExecutionMode.THREAD, max_workers=2) as executor:
         # Various outcomes
         success_task = executor.submit(lambda: 42)
         failure_task = executor.submit(lambda: 1 / 0)
 
         for name, task_id in [("Success", success_task), ("Failure", failure_task)]:
-            result = executor.get_result(task_id, timeout=5.0)
+            result = executor.result(task_id, timeout=5.0)
             outcome = handle_result(result)
             print(f"  {name}: {outcome}")
 
@@ -275,19 +270,19 @@ def error_aggregation():
             raise ValueError(f"Task {index} failed")
         return f"Task {index} succeeded"
 
-    with ThreadExecutor(max_workers=4) as executor:
+    with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
         task_ids = [executor.submit(maybe_fail, i) for i in range(8)]
 
         successes = []
         failures = []
 
         for i, task_id in enumerate(task_ids):
-            result = executor.get_result(task_id, timeout=5.0)
+            result = executor.result(task_id, timeout=5.0)
 
             if result.is_success:
                 successes.append((i, result.value))
             else:
-                failures.append((i, str(result.exception)))
+                failures.append((i, result.error))
 
         print(f"  Successes: {len(successes)}")
         for idx, value in successes:
@@ -298,8 +293,9 @@ def error_aggregation():
             print(f"    Task {idx}: {error}")
 
         # Summary statistics
-        stats = executor.get_stats()
-        print(f"\n  Success rate: {stats.success_rate:.0%}")
+        total = len(successes) + len(failures)
+        success_rate = len(successes) / total if total > 0 else 0
+        print(f"\n  Success rate: {success_rate:.0%}")
 
 
 # ============================================================================
