@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Level 3 Plugin Manager - Comprehensive Test
+Level 3 Execution Manager - Comprehensive Test
 Tests all global functions: run_parallel, emit_event, on_event
 """
 
 import time
 
-from callpyback import ExecutionMode, emit_event, on_event, plugin_session, run_parallel
+from callpyback import ExecutionMode, emit_event, on_event, execution_session, run_parallel
 
 
 # Global event handlers using decorators
@@ -37,12 +37,12 @@ def io_task(delay: float) -> str:
 
 
 def main():
-    print("🚀 CallPyBack Level 3 Plugin Manager - Comprehensive Test")
+    print("🚀 CallPyBack Level 3 Execution Manager - Comprehensive Test")
     print("=" * 60)
 
     # Test 1: Context manager (this was working)
     print("\n1️⃣ Testing Context Manager:")
-    with plugin_session() as manager:
+    with execution_session() as manager:
         manager.configure().max_threads(4).execution_mode(ExecutionMode.HYBRID).apply()
 
         results = manager.parallel(

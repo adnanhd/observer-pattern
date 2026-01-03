@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
-from callpyback import ExecutionMode, emit_event, on_event, plugin_session
+from callpyback import ExecutionMode, emit_event, on_event, execution_session
 
 
 class WorkflowStatus(Enum):
@@ -794,7 +794,7 @@ def main():
     # Create sample workflows
     workflow_definitions = create_sample_workflows()
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         # Configure for mixed I/O and CPU workload
         manager.configure().max_threads(6).execution_mode(ExecutionMode.HYBRID).apply()
 

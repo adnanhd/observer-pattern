@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List
 
-from callpyback import ExecutionMode, emit_event, on_event, plugin_session
+from callpyback import ExecutionMode, emit_event, on_event, execution_session
 
 
 @dataclass
@@ -414,7 +414,7 @@ def main():
 
     portfolios = create_sample_portfolios()
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         # Configure for compute-intensive financial calculations
         manager.configure().processes(3).max_threads(4).execution_mode(
             ExecutionMode.HYBRID

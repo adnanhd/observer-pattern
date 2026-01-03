@@ -7,7 +7,7 @@ Demonstrates request-response and pub-sub messaging patterns.
 import random
 import time
 
-from callpyback import ExecutionMode, emit_event, on_event, plugin_session
+from callpyback import ExecutionMode, emit_event, on_event, execution_session
 
 
 # Service response handlers
@@ -140,7 +140,7 @@ def main():
     print("📡 Messaging Patterns Demo")
     print("=" * 40)
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         # Configure for I/O intensive microservices
         manager.configure().max_threads(6).execution_mode(ExecutionMode.THREAD).apply()
 

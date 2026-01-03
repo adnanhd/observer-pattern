@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from callpyback import ExecutionMode, emit_event, on_event, plugin_session
+from callpyback import ExecutionMode, emit_event, on_event, execution_session
 
 
 @dataclass
@@ -593,7 +593,7 @@ def main():
         "payment": payment_service,
     }
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         # Configure for I/O intensive microservice communication
         manager.configure().max_threads(6).execution_mode(ExecutionMode.THREAD).apply()
 

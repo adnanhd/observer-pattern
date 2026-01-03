@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
-from callpyback import ExecutionMode, emit_event, on_event, plugin_session
+from callpyback import ExecutionMode, emit_event, on_event, execution_session
 
 
 @dataclass
@@ -120,14 +120,14 @@ def create_batch_items(count: int) -> List[BatchItem]:
 
 
 def main():
-    """Demo batch processing with the plugin manager"""
+    """Demo batch processing with the execution manager"""
     print("⚡ Simple Batch Processor")
     print("=" * 40)
 
     batch_id = f"batch_{int(time.time())}"
     items = create_batch_items(12)
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         # Configure for mixed CPU/I/O workload
         manager.configure().max_threads(4).apply()
 

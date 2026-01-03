@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List
 
-from callpyback import ExecutionMode, emit_event, on_event, plugin_session
+from callpyback import ExecutionMode, emit_event, on_event, execution_session
 
 
 @dataclass
@@ -238,7 +238,7 @@ def main():
             )
             training_configs.append(config)
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         # Configure for CPU-intensive multiprocessing
         manager.configure().processes(4).max_threads(2).execution_mode(
             ExecutionMode.HYBRID

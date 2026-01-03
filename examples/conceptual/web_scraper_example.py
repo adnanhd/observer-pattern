@@ -8,7 +8,7 @@ import random
 import time
 from typing import Dict
 
-from callpyback import ExecutionMode, emit_event, on_event, plugin_session
+from callpyback import ExecutionMode, emit_event, on_event, execution_session
 
 
 # Event handlers for progress tracking
@@ -64,7 +64,7 @@ def scrape_url(url: str) -> Dict:
 
 def main():
     """Demo parallel web scraping with events"""
-    print("🕷️  Simple Web Scraper with Plugin Manager")
+    print("🕷️  Simple Web Scraper with Execution Manager")
     print("=" * 50)
 
     # URLs to scrape
@@ -79,7 +79,7 @@ def main():
         "https://docs.site/guide1",
     ]
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         # Configure for I/O intensive work (web requests)
         manager.configure().max_threads(4).execution_mode(ExecutionMode.THREAD).apply()
 

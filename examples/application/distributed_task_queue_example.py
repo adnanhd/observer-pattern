@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
-from callpyback import ExecutionMode, emit_event, on_event, plugin_session
+from callpyback import ExecutionMode, emit_event, on_event, execution_session
 
 
 class TaskStatus(Enum):
@@ -584,7 +584,7 @@ def main():
 
     workers = [image_worker, email_worker, analytics_worker, general_worker]
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         # Configure for I/O intensive task processing
         manager.configure().max_threads(6).execution_mode(ExecutionMode.THREAD).apply()
 

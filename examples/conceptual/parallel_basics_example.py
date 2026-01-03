@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
 Parallel Execution Basics - Conceptual Example
-Demonstrates the fundamental concepts of the unified plugin API.
+Demonstrates the fundamental concepts of the unified execution API.
 """
 
 import random
 import time
 
-from callpyback import ExecutionMode, plugin_session, run_parallel
+
+from functools import partial
+from callpyback import ExecutionMode, execution_session, run_parallel
 
 
 def cpu_task(n: int) -> int:
@@ -64,7 +66,7 @@ def main():
     # Example 2: Context manager with configuration
     print("\n2️⃣ Configured Execution:")
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         # Configure thread pool
         manager.configure().max_threads(3).execution_mode(ExecutionMode.THREAD).apply()
 
@@ -90,26 +92,38 @@ def main():
     # Example 3: Different execution modes
     print("\n3️⃣ Execution Mode Comparison:")
 
-    # Small CPU tasks for comparison
-    small_tasks = [lambda i=i: cpu_task(200 + i * 50) for i in range(4)]
-
     # Test different modes
-    modes = [ExecutionMode.THREAD, ExecutionMode.HYBRID]
 
-    for mode in modes:
-        with plugin_session() as manager:
-            manager.configure().max_threads(2).execution_mode(mode).apply()
+    for mode in [ExecutionMode.THREAD, ExecutionMode.PROCESS, ExecutionMode.HYBRID]:
+        with execution_session() as manager:
+            (
+                manager.configure()
+                .auto_start(True)
+                .max_threads(2)
+                .max_processes(2)
+                .enable_hybrid(ExecutionMode.HYBRID == mode)
+                .execution_mode(mode)
+                .apply()
+            )
+            print("manager mode", manager.config.default_execution_mode.name, "executor", manager.get_executor_mode())
 
             start_time = time.time()
-            mode_results = manager.parallel(*small_tasks)
+            mode_results = manager.parallel(
+                partial(cpu_task, 500),
+                partial(io_task, 0.1),
+                partial(cpu_task, 300),
+                partial(io_task, 0.2),
+            )
             elapsed = time.time() - start_time
 
-            print(f"   {mode.value}: {len(mode_results)} tasks in {elapsed:.3f}s")
+            print(
+                f"   {mode.value}: {len(mode_results)} tasks in {elapsed:.3f}s -- {manager.get_executor_mode()}"
+            )
 
     # Example 4: Manager metrics
     print("\n4️⃣ Performance Metrics:")
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         manager.configure().max_threads(4).apply()
 
         # Run some tasks to generate metrics

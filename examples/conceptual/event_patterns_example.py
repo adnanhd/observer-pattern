@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Event Patterns - Conceptual Example
-Demonstrates event-driven patterns with the unified plugin API.
+Demonstrates event-driven patterns with the unified execution API.
 """
 
 import random
 import time
 
-from callpyback import emit_event, on_event, plugin_session, run_parallel
+from callpyback import emit_event, on_event, execution_session, run_parallel
 
 
 # Pattern-based event handlers
@@ -107,7 +107,7 @@ def simulate_workflow(workflow_id: str) -> str:
 
 def main():
     """Demo event patterns with parallel execution"""
-    print("📡 Event Patterns with Unified Plugin API")
+    print("📡 Event Patterns with Unified Execution API")
     print("=" * 50)
 
     # Test 1: Global functions without context manager
@@ -133,7 +133,7 @@ def main():
     # Test 2: Context manager with configuration
     print("\n2️⃣ Testing Context Manager:")
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         # Configure the manager
         manager.configure().max_processes(3).enable_hybrid().apply()
 

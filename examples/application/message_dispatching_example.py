@@ -8,8 +8,8 @@ import random
 import time
 from dataclasses import dataclass
 
-from callpyback import ExecutionMode, plugin_session
-from callpyback.plugins import MessageQueue
+from callpyback import ExecutionMode, execution_session
+from callpyback.execution import MessageQueue
 
 
 @dataclass
@@ -353,7 +353,7 @@ def main():
     mq, services = setup_message_queue_system()
 
     try:
-        with plugin_session() as manager:
+        with execution_session() as manager:
             # Configure for I/O intensive message processing
             manager.configure().max_threads(8).execution_mode(ExecutionMode.THREAD).apply()
 

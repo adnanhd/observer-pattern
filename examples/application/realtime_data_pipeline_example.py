@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
-from callpyback import ExecutionMode, emit_event, on_event, plugin_session
+from callpyback import ExecutionMode, emit_event, on_event, execution_session
 
 
 @dataclass
@@ -513,7 +513,7 @@ def main():
     stages = [ingestion_stage, transformation_stage, anomaly_stage, storage_stage]
     stage_names = ["Ingestion", "Transformation", "Anomaly Detection", "Storage"]
 
-    with plugin_session() as manager:
+    with execution_session() as manager:
         # Configure for I/O intensive stream processing
         manager.configure().max_threads(8).execution_mode(ExecutionMode.THREAD).apply()
 
