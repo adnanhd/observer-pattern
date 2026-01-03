@@ -23,7 +23,7 @@ from callpyback.observers import (
 from callpyback.queue import MessageQueue
 from callpyback.remote import RemoteQueue, RemoteSubscription
 from callpyback.rpc import RPCClient, RPCServer
-from callpyback.task import TaskRunner, task
+from callpyback.task import TaskPool, TaskRunner, task
 from callpyback.transports import MemoryTransport, Transport
 from callpyback.types import (
     Message,
@@ -63,6 +63,7 @@ __all__ = [
     # Task
     "task",
     "TaskRunner",
+    "TaskPool",
     # RPC
     "RPCServer",
     "RPCClient",

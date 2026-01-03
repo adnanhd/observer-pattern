@@ -1,6 +1,7 @@
 """Unified task decorator with full lifecycle support."""
 
 import functools
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Union
 from uuid import uuid4
@@ -13,17 +14,147 @@ Observer = Any  # Will be properly typed when observers are updated
 ContextHandler = Callable[[TaskContext], None]
 
 
+class TaskPool:
+    """Manages a pool of task instances with concurrency limiting.
+
+    Provides semaphore-based concurrency control and tracking of
+    active/queued tasks for load balancing.
+
+    Example:
+        pool = TaskPool(max_instances=3)
+
+        with pool.acquire():
+            # Only 3 concurrent executions allowed
+            do_work()
+
+        print(pool.stats)  # {'active': 0, 'max': 3, 'total_processed': 1}
+    """
+
+    def __init__(self, max_instances: int = 1):
+        if max_instances < 1:
+            raise ValueError("max_instances must be at least 1")
+
+        self.max_instances = max_instances
+        self._semaphore = threading.Semaphore(max_instances)
+        self._active = 0
+        self._total_processed = 0
+        self._queued = 0
+        self._lock = threading.Lock()
+
+    def acquire(self, blocking: bool = True, timeout: Optional[float] = None) -> bool:
+        """Acquire a slot in the pool.
+
+        Args:
+            blocking: If True, block until a slot is available
+            timeout: Maximum time to wait (None = forever)
+
+        Returns:
+            True if slot acquired, False if timeout/non-blocking failed
+        """
+        with self._lock:
+            self._queued += 1
+
+        acquired = self._semaphore.acquire(blocking=blocking, timeout=timeout)
+
+        with self._lock:
+            self._queued -= 1
+            if acquired:
+                self._active += 1
+
+        return acquired
+
+    def release(self) -> None:
+        """Release a slot back to the pool."""
+        with self._lock:
+            self._active -= 1
+            self._total_processed += 1
+        self._semaphore.release()
+
+    @property
+    def active(self) -> int:
+        """Number of currently active instances."""
+        with self._lock:
+            return self._active
+
+    @property
+    def queued(self) -> int:
+        """Number of tasks waiting for a slot."""
+        with self._lock:
+            return self._queued
+
+    @property
+    def available(self) -> int:
+        """Number of available slots."""
+        with self._lock:
+            return self.max_instances - self._active
+
+    @property
+    def stats(self) -> Dict[str, int]:
+        """Get pool statistics."""
+        with self._lock:
+            return {
+                "active": self._active,
+                "queued": self._queued,
+                "available": self.max_instances - self._active,
+                "max": self.max_instances,
+                "total_processed": self._total_processed,
+            }
+
+    class _AcquireContext:
+        """Context manager for pool slot acquisition."""
+
+        def __init__(self, pool: "TaskPool", blocking: bool, timeout: Optional[float]):
+            self.pool = pool
+            self.blocking = blocking
+            self.timeout = timeout
+            self.acquired = False
+
+        def __enter__(self) -> bool:
+            self.acquired = self.pool.acquire(self.blocking, self.timeout)
+            return self.acquired
+
+        def __exit__(self, *args) -> None:
+            if self.acquired:
+                self.pool.release()
+
+    def slot(
+        self, blocking: bool = True, timeout: Optional[float] = None
+    ) -> _AcquireContext:
+        """Context manager for acquiring a pool slot.
+
+        Example:
+            with pool.slot() as acquired:
+                if acquired:
+                    do_work()
+        """
+        return self._AcquireContext(self, blocking, timeout)
+
+
 class TaskRunner:
     """Unified execution engine for tasks.
 
     Handles both direct calls and queue-triggered execution through
     the same code path, ensuring consistent observer and handler behavior.
 
+    Args:
+        func: The function to execute
+        topic: Topic name for queue integration
+        executor: Executor for task execution
+        queue: Optional MessageQueue for pub-sub
+        on_execute: List of observers for lifecycle hooks
+        on_success: Handler called on success
+        on_failure: Handler called on failure
+        on_complete: Handler called after execution
+        publish_result: Auto-publish results to queue
+        max_instances: Maximum concurrent executions (None = unlimited)
+        instance_timeout: Timeout waiting for available slot (None = forever)
+
     Example:
         runner = TaskRunner(
             func=my_func,
             topic="my.topic",
             executor=Executor(),
+            max_instances=3,  # Only 3 concurrent executions
             on_execute=[TimingObserver()],
             on_success=lambda ctx: print(f"Done: {ctx.result}"),
         )
@@ -42,6 +173,8 @@ class TaskRunner:
         on_failure: Optional[ContextHandler] = None,
         on_complete: Optional[ContextHandler] = None,
         publish_result: bool = True,
+        max_instances: Optional[int] = None,
+        instance_timeout: Optional[float] = None,
     ):
         self.func = func
         self.topic = topic
@@ -54,18 +187,43 @@ class TaskRunner:
         self.publish_result = publish_result
         self.state = SharedState()  # Shared across all invocations
 
+        # Pool for concurrency limiting
+        self.max_instances = max_instances
+        self.instance_timeout = instance_timeout
+        self.pool = TaskPool(max_instances) if max_instances else None
+
     def run(self, *args, **kwargs) -> Any:
         """Execute task with full lifecycle.
 
-        1. Create TaskContext
-        2. Call on_execute observers (on_start)
-        3. Execute function via executor
-        4. Call on_success/on_failure observers
-        5. Call on_complete handler
-        6. Publish result to queue (optional)
-        7. Return result (or raise exception)
+        1. Acquire pool slot (if max_instances set)
+        2. Create TaskContext
+        3. Call on_execute observers (on_start)
+        4. Execute function via executor
+        5. Call on_success/on_failure observers
+        6. Call on_complete handler
+        7. Publish result to queue (optional)
+        8. Release pool slot
+        9. Return result (or raise exception)
         """
-        # 1. Create context
+        # 1. Acquire pool slot if concurrency limiting is enabled
+        if self.pool:
+            acquired = self.pool.acquire(blocking=True, timeout=self.instance_timeout)
+            if not acquired:
+                raise TimeoutError(
+                    f"Timeout waiting for available slot in task pool "
+                    f"(max_instances={self.max_instances})"
+                )
+
+        try:
+            return self._execute(args, kwargs)
+        finally:
+            # Release pool slot
+            if self.pool:
+                self.pool.release()
+
+    def _execute(self, args: tuple, kwargs: dict) -> Any:
+        """Internal execution logic."""
+        # 2. Create context
         ctx = TaskContext(
             task_id=str(uuid4()),
             func_name=self.func.__name__,
@@ -77,15 +235,19 @@ class TaskRunner:
             state=self.state,
         )
 
+        # Add pool stats to metadata if available
+        if self.pool:
+            ctx.metadata["pool_stats"] = self.pool.stats
+
         try:
-            # 2. on_execute observers (on_start)
+            # 3. on_execute observers (on_start)
             for observer in self.on_execute:
                 try:
                     observer.on_start(ctx)
                 except Exception:
                     pass  # Don't let observer errors affect execution
 
-            # 3. Execute via executor
+            # 4. Execute via executor
             if self.executor.mode == ExecutionMode.SEQUENTIAL:
                 ctx.result = self.func(*args, **kwargs)
             else:
@@ -97,7 +259,7 @@ class TaskRunner:
 
             ctx.end_time = time.time()
 
-            # 4. on_success: observers (on_end) + handler
+            # 5. on_success: observers (on_end) + handler
             for observer in self.on_execute:
                 try:
                     observer.on_end(ctx)
@@ -110,7 +272,7 @@ class TaskRunner:
                 except Exception:
                     pass
 
-            # 5. Publish success to queue
+            # 6. Publish success to queue
             if self.publish_result and self.queue:
                 try:
                     self.queue.publish(
@@ -161,7 +323,7 @@ class TaskRunner:
             raise
 
         finally:
-            # 6. on_complete always runs
+            # 7. on_complete always runs
             if self.on_complete:
                 try:
                     self.on_complete(ctx)
@@ -178,6 +340,8 @@ def task(
     on_failure: Optional[ContextHandler] = None,
     on_complete: Optional[ContextHandler] = None,
     publish_result: bool = True,
+    max_instances: Optional[int] = None,
+    instance_timeout: Optional[float] = None,
 ):
     """Decorator that creates a callable task with full lifecycle support.
 
@@ -196,6 +360,8 @@ def task(
         on_failure: Handler called on failed execution (receives TaskContext)
         on_complete: Handler called after execution, success or failure
         publish_result: If True, publishes to {topic}.success or {topic}.failure
+        max_instances: Maximum concurrent executions (None = unlimited)
+        instance_timeout: Timeout in seconds waiting for slot (None = forever)
 
     Example:
         from callpyback import task, MessageQueue, Executor, TimingObserver
@@ -208,6 +374,7 @@ def task(
             queue=queue,
             topic="process.data",
             executor=executor,
+            max_instances=3,  # Only 3 concurrent executions
             on_execute=[timing],
             on_success=lambda ctx: print(f"Done: {ctx.result}"),
         )
@@ -222,6 +389,9 @@ def task(
 
         # Both tracked by timing observer
         print(timing.stats)
+
+        # Check pool stats
+        print(process_data.pool.stats)
     """
 
     def decorator(func: Callable) -> Callable:
@@ -240,6 +410,8 @@ def task(
             on_failure=on_failure,
             on_complete=on_complete,
             publish_result=publish_result,
+            max_instances=max_instances,
+            instance_timeout=instance_timeout,
         )
 
         # Register queue subscription if queue provided
@@ -274,6 +446,9 @@ def task(
 
         # Expose state for external access
         wrapper.state = runner.state
+
+        # Expose pool for monitoring (if max_instances set)
+        wrapper.pool = runner.pool
 
         return wrapper
 
