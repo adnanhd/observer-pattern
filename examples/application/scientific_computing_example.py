@@ -542,7 +542,7 @@ def main():
     # Setup
     queue = MessageQueue()
     setup_event_handlers(queue)
-    executor = Executor(mode=ExecutionMode.PROCESS, max_workers=4)
+    executor = Executor(mode=ExecutionMode.THREAD, max_workers=4)
 
     # 1. Molecular Dynamics Simulations
     print("\nRunning molecular dynamics simulations...")
