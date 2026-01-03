@@ -132,6 +132,39 @@ class MessageQueue:
         self._transport.send(reply)
         return reply.id
 
+    def register_task(self, topic: str, task_func: Callable) -> str:
+        """Register a task function for a topic.
+
+        Convenience method to subscribe a task function that automatically
+        extracts arguments from message payloads.
+
+        Args:
+            topic: Topic to subscribe to
+            task_func: Task function to call (can be @task decorated or plain)
+
+        Returns:
+            handler_id for unsubscription
+
+        Example:
+            @task()
+            def process_data(data: str) -> str:
+                return data.upper()
+
+            queue.register_task("process.data", process_data)
+            queue.publish("process.data", "hello")  # Calls process_data("hello")
+        """
+
+        def handler(msg: Message):
+            payload = msg.payload
+            if isinstance(payload, dict):
+                return task_func(**payload)
+            elif isinstance(payload, (list, tuple)):
+                return task_func(*payload)
+            else:
+                return task_func(payload)
+
+        return self.subscribe(topic, handler)
+
     def close(self) -> None:
         """Close queue and transport."""
         self._transport.close()

@@ -1,8 +1,8 @@
 """
-CallPyBack: Message-driven function pipelines with pub-sub, executors, and RPC.
+CallPyBack: Message-driven task execution with pub-sub, executors, and RPC.
 
-This package provides a clean implementation of message queues, pipelines,
-and remote procedure calls for Python function orchestration.
+This package provides a unified task execution system combining message queues,
+executors, observers, and remote procedure calls for Python function orchestration.
 """
 
 from callpyback.executor import ExecutionMode, Executor
@@ -20,21 +20,23 @@ from callpyback.observers import (
     TimingObserver,
     observe,
 )
-from callpyback.pipeline import Pipeline, PipelineStep, task
 from callpyback.queue import MessageQueue
 from callpyback.remote import RemoteQueue, RemoteSubscription
 from callpyback.rpc import RPCClient, RPCServer
+from callpyback.task import TaskRunner, task
 from callpyback.transports import MemoryTransport, Transport
 from callpyback.types import (
     Message,
     RPCRequest,
     RPCResponse,
+    SharedState,
+    TaskContext,
     TaskRequest,
     TaskResult,
     TaskStatus,
 )
 
-__version__ = "3.0.0"
+__version__ = "4.0.0"
 __author__ = "Adnan Harun Dogan"
 __email__ = "adnanharundogan@gmail.com"
 
@@ -44,6 +46,8 @@ __all__ = [
     "TaskRequest",
     "TaskResult",
     "TaskStatus",
+    "TaskContext",
+    "SharedState",
     "RPCRequest",
     "RPCResponse",
     # Transport
@@ -56,10 +60,9 @@ __all__ = [
     # Executor
     "Executor",
     "ExecutionMode",
-    # Pipeline
-    "Pipeline",
-    "PipelineStep",
+    # Task
     "task",
+    "TaskRunner",
     # RPC
     "RPCServer",
     "RPCClient",

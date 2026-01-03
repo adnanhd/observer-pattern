@@ -8,10 +8,17 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Union
 
+from callpyback.types import TaskContext
+
 
 @dataclass
 class ExecutionContext:
-    """Context passed to observers during execution."""
+    """Context passed to observers during execution.
+
+    Note: This is the legacy context for @observe decorator.
+    For @task decorator, TaskContext is used which has additional fields
+    (task_id, topic, executor, state). Both are compatible with observers.
+    """
 
     func_name: str
     args: tuple
@@ -29,6 +36,11 @@ class ExecutionContext:
     @property
     def is_success(self) -> bool:
         return self.error is None
+
+
+# Type alias: Observers accept either ExecutionContext or TaskContext
+# Both have the same interface (func_name, args, kwargs, result, error, metadata, etc.)
+Context = Union[ExecutionContext, TaskContext]
 
 
 class Observer(ABC):
