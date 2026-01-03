@@ -1,284 +1,249 @@
-# CallPyBack 2.0 - Advanced Callback Decorator
+# CallPyBack
 
-A theoretically sound, production-ready callback decorator system implementing formal design patterns and addressing common limitations in callback architectures.
+Message-driven function pipelines with pub-sub, executors, and RPC.
 
-## 🚀 Features
-
-- **🏗️ Formal Design Patterns**: Observer, State Machine, Chain of Responsibility, Strategy
-- **🔒 Thread-Safe**: Concurrent execution with proper synchronization
-- **🧠 Memory Safe**: Weak references prevent memory leaks
-- **🔧 Type Safe**: Full static type checking with protocols (Python 3.8+)
-- **⚡ Performance**: O(log n) operations with efficient data structures
-- **🧪 Testable**: Dependency injection enables comprehensive testing
-- **📊 Observable**: Built-in metrics and performance monitoring
-- **🛡️ Robust**: Error isolation with circuit breaker patterns
-
-## 📦 Installation
+## Installation
 
 ```bash
 pip install callpyback
+
+# Optional transports
+pip install callpyback[redis]
+pip install callpyback[zmq]
 ```
 
-## 🏃‍♂️ Quick Start
+## Quick Start
+
+### Pipeline
+
+Chain functions with event-based flow control:
 
 ```python
-from callpyback import CallPyBack, on_call, on_success, on_failure
+from callpyback import Pipeline
 
-# Basic usage
-@CallPyBack(observers=[
-    on_call(lambda ctx: print(f"Calling {ctx.function_signature.name}")),
-    on_success(lambda result: print(f"Success: {result.value}")),
-    on_failure(lambda result: print(f"Error: {result.exception}"))
-])
-def divide(a, b):
-    if b == 0:
-        raise ValueError("Cannot divide by zero")
-    return a / b
+def validate(data):
+    if not data:
+        raise ValueError("Empty data")
+    return data
 
-result = divide(10, 2)  # Prints call and success messages
+def transform(data):
+    return data.upper()
+
+def save(data):
+    print(f"Saved: {data}")
+    return data
+
+result = (
+    Pipeline()
+    .pipe(validate)
+    .pipe(transform)
+    .pipe(save)
+    .on_success(lambda r: print(f"Done: {r.value}"))
+    .on_failure(lambda r: print(f"Error: {r.error}"))
+    .run("hello")
+)
 # Output:
-# Calling divide
-# Success: 5.0
+# Saved: HELLO
+# Done: HELLO
 ```
 
-## 🔧 Advanced Features
+### Task Decorator
 
-### Variable Extraction
-Capture local variables from function execution:
+Wrap functions with event handlers:
 
 ```python
-@CallPyBack(
-    observers=[on_success(lambda local_variables: print(f"Variables: {local_variables}"))],
-    variable_names=['intermediate', 'final']
+from callpyback import task
+
+@task(
+    on_success=lambda r: print(f"Result: {r.value}"),
+    on_failure=lambda r: print(f"Failed: {r.error}")
 )
-def calculation(x):
-    intermediate = x * 2
-    final = intermediate + 10
-    return final
+def compute(x, y):
+    return x + y
 
-calculation(5)
-# Output: Variables: {'intermediate': 10, 'final': 20}
+result = compute(10, 20)
+# Output: Result: 30
 ```
 
-### Custom Observers
-Create sophisticated monitoring systems:
+### Executor
+
+Run tasks in sequential, thread, or process mode:
 
 ```python
-from callpyback import BaseObserver, ExecutionContext
+from callpyback import Executor, ExecutionMode
 
-class DatabaseObserver(BaseObserver):
-    def update(self, context: ExecutionContext) -> None:
-        # Log to database
-        self.db.log(context.function_signature.name, context.timestamp)
+def heavy_task(n):
+    return sum(range(n))
 
-@CallPyBack(observers=[DatabaseObserver()])
-def important_function():
-    return "critical result"
+# Thread-based execution
+with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
+    task_id = executor.submit(heavy_task, 1000000)
+    result = executor.result(task_id)
+    print(result.value)
+
+# Process-based execution for CPU-bound tasks
+with Executor(mode=ExecutionMode.PROCESS, max_workers=4) as executor:
+    results = executor.map(heavy_task, [100000, 200000, 300000])
+    for r in results:
+        print(r.value)
 ```
 
-### Built-in Observers
-Leverage ready-made observers for common use cases:
+### Message Queue
+
+Pub-sub messaging with Pydantic validation:
 
 ```python
-from callpyback.observers.builtin import LoggingObserver, MetricsObserver, TimingObserver
+from callpyback import MessageQueue
 
-@CallPyBack(observers=[
-    LoggingObserver(),              # Structured logging
-    MetricsObserver(),              # Performance metrics
-    TimingObserver(threshold=1.0)   # Slow execution alerts
-])
-def monitored_function():
-    return "result"
+queue = MessageQueue()
+
+@queue.on("events.*")
+def handle_event(message):
+    print(f"Received: {message.topic} -> {message.payload}")
+
+queue.publish("events.user", {"action": "login", "user": "alice"})
+# Output: Received: events.user -> {'action': 'login', 'user': 'alice'}
+
+# Request-reply pattern
+@queue.on("math.add")
+def add_handler(message):
+    a, b = message.payload["a"], message.payload["b"]
+    return a + b
+
+result = queue.request("math.add", {"a": 10, "b": 20}, timeout=5.0)
+print(result)  # 30
 ```
 
-### Error Handling
-Sophisticated error management with fallback values:
+### RPC
+
+Remote procedure calls over message queue:
 
 ```python
-@CallPyBack(
-    observers=[on_failure(handle_error)],
-    exception_classes=(ValueError, TypeError),
-    default_return="fallback_value"
-)
-def risky_function():
-    raise ValueError("Something went wrong")
+from callpyback import MessageQueue, Executor, RPCServer, RPCClient
+
+queue = MessageQueue()
+executor = Executor()
+
+# Server
+server = RPCServer(queue, executor, service_name="calculator")
+
+@server.register()
+def add(a: int, b: int) -> int:
+    return a + b
+
+@server.register()
+def multiply(a: int, b: int) -> int:
+    return a * b
+
+server.start()
+
+# Client
+client = RPCClient(queue, service_name="calculator")
+print(client.call("add", 10, 20))       # 30
+print(client.multiply(5, 6))            # 30 (dynamic method access)
+
+server.stop()
+```
+
+### Async Support
+
+All components support async/await:
+
+```python
+import asyncio
+from callpyback import MessageQueue, Executor, ExecutionMode
+
+async def main():
+    # Async message queue
+    queue = MessageQueue()
     
-result = risky_function()  # Returns "fallback_value"
+    @queue.on("async.task")
+    def handler(msg):
+        return msg.payload * 2
+    
+    result = await queue.request_async("async.task", 21, timeout=5.0)
+    print(result)  # 42
+    
+    # Async executor
+    async with Executor(mode=ExecutionMode.THREAD) as executor:
+        task_id = await executor.submit_async(lambda x: x ** 2, 10)
+        result = await executor.result_async(task_id)
+        print(result.value)  # 100
+
+asyncio.run(main())
 ```
 
-### Thread Safety
-Built-in support for concurrent execution:
+## API Reference
+
+### Types
+
+- `Message` - Pydantic model for queue messages
+- `TaskRequest` - Task submission request
+- `TaskResult` - Task execution result
+- `TaskStatus` - Enum: PENDING, RUNNING, COMPLETED, FAILED, CANCELLED
+- `RPCRequest` / `RPCResponse` - RPC message types
+
+### Transport
+
+- `Transport` - Abstract base for message transports
+- `MemoryTransport` - In-memory transport (default)
+
+### MessageQueue
 
 ```python
-@CallPyBack(
-    observers=[MetricsObserver()],
-    enable_async_observers=True  # Observers run in background
+queue = MessageQueue(transport=None)  # Uses MemoryTransport by default
+
+queue.publish(topic, payload, **headers)  # Publish message
+queue.subscribe(topic, handler)           # Subscribe to topic
+queue.on(topic)                           # Decorator for subscription
+queue.request(topic, payload, timeout)    # Request-reply (sync)
+await queue.request_async(...)            # Request-reply (async)
+```
+
+### Executor
+
+```python
+executor = Executor(
+    mode=ExecutionMode.SEQUENTIAL,  # SEQUENTIAL, THREAD, or PROCESS
+    max_workers=4,
+    queue=None  # Optional MessageQueue for events
 )
-def concurrent_function(data):
-    return process_data(data)
 
-# Safe to call from multiple threads
+task_id = executor.submit(func, *args, **kwargs)
+result = executor.result(task_id, timeout=None)
+results = executor.map(func, items)
+executor.cancel(task_id)
+stats = executor.stats()
 ```
 
-## 🏛️ Architecture
-
-CallPyBack 2.0 is built on solid theoretical foundations:
-
-### Design Patterns
-- **Observer Pattern**: Decoupled event notifications with priority ordering
-- **State Machine**: Formal execution flow management with validation
-- **Strategy Pattern**: Pluggable algorithms for variable extraction and error handling
-- **Chain of Responsibility**: Composable error handling chains
-- **Repository Pattern**: Observer lifecycle management with weak references
-- **Factory Pattern**: Convenient observer creation functions
-
-### Core Components
-- **ExecutionContext**: Immutable state container with full execution information
-- **StateMachine**: Thread-safe state transitions with validation
-- **ObserverManager**: Concurrent observer coordination with error isolation
-- **VariableExtractor**: Safe local variable capture using `sys.setprofile`
-- **ErrorHandler**: Chainable error handling with circuit breaker patterns
-
-## 📊 Performance
-
-CallPyBack 2.0 is optimized for production use:
-
-- **Observer Lookup**: O(log n) with indexed priority queues
-- **Memory Usage**: Weak references prevent observer memory leaks
-- **Concurrency**: Lock-free operations where possible
-- **Error Isolation**: Observer failures don't impact function execution
-- **Variable Extraction**: Minimal overhead with optional extraction
-
-## 🧪 Testing
-
-CallPyBack provides comprehensive testing support:
+### Pipeline
 
 ```python
-from callpyback.core.time_sources import MockTimeSource
+pipeline = Pipeline(executor=None)
 
-# Mock time for deterministic testing
-mock_time = MockTimeSource(1000.0)
-decorator = CallPyBack(time_source=mock_time)
-
-@decorator
-def test_function():
-    mock_time.advance(0.5)  # Simulate execution time
-    return "result"
-
-# Execution time will be exactly 0.5 seconds
+pipeline.pipe(func)           # Add step
+pipeline.on_success(handler)  # Success handler
+pipeline.on_failure(handler)  # Failure handler  
+pipeline.on_complete(handler) # Completion handler (success or failure)
+result = pipeline.run(input)  # Execute pipeline
 ```
 
-## 📈 Migration from CallPyBack 1.x
-
-CallPyBack 2.0 provides backward compatibility:
+### RPC
 
 ```python
-# Old way (still works)
-@CallPyBack(
-    on_call=lambda f, kwargs: print("called"),
-    on_success=lambda f, result: print("success")
-)
-def my_function():
-    return "result"
+# Server
+server = RPCServer(queue, executor, service_name="myservice")
+server.register(name=None)(func)  # Register method
+server.start()
+server.stop()
 
-# New way (recommended)
-@CallPyBack(observers=[
-    on_call(lambda ctx: print("called")),
-    on_success(lambda result: print("success"))
-])
-def my_function():
-    return "result"
+# Client
+client = RPCClient(queue, service_name="myservice", timeout=30.0)
+result = client.call(method, *args, **kwargs)
+result = await client.call_async(method, *args, **kwargs)
+result = client.method_name(*args)  # Dynamic access
 ```
 
-## 🔍 Monitoring & Observability
+## License
 
-### Built-in Metrics
-```python
-metrics = MetricsObserver()
-
-@CallPyBack(observers=[metrics])
-def monitored_function():
-    return "result"
-
-# Get comprehensive metrics
-stats = metrics.get_metrics()
-print(f"Total executions: {stats['total_executions']}")
-print(f"Average time: {stats['average_execution_time']:.3f}s")
-```
-
-### Performance Alerts
-```python
-timing = TimingObserver(threshold=0.1)  # 100ms threshold
-
-@CallPyBack(observers=[timing])
-def potentially_slow_function():
-    time.sleep(0.2)  # Will trigger slow execution alert
-    return "result"
-```
-
-## 🛠️ Development
-
-### Setup
-```bash
-git clone https://github.com/callpyback/callpyback
-cd callpyback
-pip install -e ".[dev]"
-```
-
-### Testing
-```bash
-# Run tests
-pytest
-
-# Run with coverage
-pytest --cov=callpyback --cov-report=html
-
-# Type checking
-mypy callpyback/
-
-# Code formatting
-black callpyback/
-isort callpyback/
-```
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Add tests for new functionality
-4. Ensure all tests pass (`pytest`)
-5. Format code (`black . && isort .`)
-6. Submit a pull request
-
-## 📚 Documentation
-
-- [API Reference](https://callpyback.readthedocs.io/api/)
-- [User Guide](https://callpyback.readthedocs.io/guide/)
-- [Examples](examples/)
-- [Migration Guide](https://callpyback.readthedocs.io/migration/)
-
-## 🆚 Comparison with Other Solutions
-
-| Feature | CallPyBack 2.0 | Decorators | functools | Custom Solutions |
-|---------|----------------|------------|-----------|------------------|
-| Type Safety | ✅ Full | ❌ None | ❌ None | ⚠️ Manual |
-| Thread Safety | ✅ Built-in | ❌ Manual | ❌ Manual | ⚠️ Manual |
-| Memory Safety | ✅ Weak refs | ❌ Manual | ❌ Manual | ⚠️ Manual |
-| Error Isolation | ✅ Circuit breaker | ❌ None | ❌ None | ⚠️ Manual |
-| Performance | ✅ O(log n) | ⚠️ O(n) | ⚠️ O(n) | ❓ Varies |
-| Extensibility | ✅ Plugin system | ❌ Limited | ❌ Limited | ❓ Varies |
-| Testing | ✅ DI + Mocks | ❌ Difficult | ❌ Difficult | ⚠️ Manual |
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- Inspired by the Gang of Four design patterns
-- Built on solid software engineering principles
-- Community feedback and contributions
-
----
-
-**CallPyBack 2.0** - Transform your Python functions into observable, robust, and maintainable components with enterprise-grade callback management.
+MIT

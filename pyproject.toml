@@ -4,71 +4,66 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "callpyback"
-version = "2.0.0"
-description = "Advanced callback decorator with formal design patterns"
-authors = [{name = "CallPyBack Team", email = "team@callpyback.dev"}]
-license = {text = "MIT"}
+version = "3.0.0"
+description = "Message-driven function pipelines with pub-sub, executors, and RPC"
+authors = [{ name = "Adnan Harun Dogan", email = "adnanharundogan@gmail.com" }]
+license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 dependencies = [
-    "typing-extensions>=4.0.0",
+    "pydantic>=2.0.0",
+    "typing-extensions>=4.0.0;python_version<'3.10'",
 ]
 
 [project.optional-dependencies]
+redis = ["redis>=4.0.0"]
+zmq = ["pyzmq>=25.0.0"]
 dev = [
-    "pytest>=6.0.0",
-    "pytest-cov>=2.10.0",
-    "mypy>=0.910",
-    "black>=22.0.0",
-    "isort>=5.0.0",
-    "flake8>=4.0.0",
-]
-docs = [
-    "sphinx>=4.0.0",
-    "sphinx-rtd-theme>=1.0.0",
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/callpyback/callpyback"
-Documentation = "https://callpyback.readthedocs.io"
-Repository = "https://github.com/callpyback/callpyback.git"
-Issues = "https://github.com/callpyback/callpyback/issues"
+Homepage = "https://github.com/adnanharundogan/callpyback"
+Repository = "https://github.com/adnanharundogan/callpyback.git"
+Issues = "https://github.com/adnanharundogan/callpyback/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["callpyback*"]
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-check_untyped_defs = true
-disallow_untyped_decorators = true
+strict = true
 
-[tool.black]
+[tool.ruff]
 line-length = 88
-target-version = ['py38']
+target-version = "py39"
 
-[tool.isort]
-profile = "black"
-line_length = 88
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--cov=callpyback --cov-report=html --cov-report=term-missing"
+addopts = "-v --tb=short"
