@@ -1,6 +1,6 @@
 # CallPyBack
 
-Message-driven function pipelines with pub-sub, executors, and RPC.
+Message-driven task execution with pub-sub, executors, and RPC.
 
 ## Installation
 
@@ -14,56 +14,44 @@ pip install callpyback[zmq]
 
 ## Quick Start
 
-### Pipeline
-
-Chain functions with event-based flow control:
-
-```python
-from callpyback import Pipeline
-
-def validate(data):
-    if not data:
-        raise ValueError("Empty data")
-    return data
-
-def transform(data):
-    return data.upper()
-
-def save(data):
-    print(f"Saved: {data}")
-    return data
-
-result = (
-    Pipeline()
-    .pipe(validate)
-    .pipe(transform)
-    .pipe(save)
-    .on_success(lambda r: print(f"Done: {r.value}"))
-    .on_failure(lambda r: print(f"Error: {r.error}"))
-    .run("hello")
-)
-# Output:
-# Saved: HELLO
-# Done: HELLO
-```
-
 ### Task Decorator
 
-Wrap functions with event handlers:
+The `@task` decorator is the core abstraction - callable-compatible with full lifecycle support:
 
 ```python
-from callpyback import task
+from callpyback import task, MessageQueue, Executor, ExecutionMode, TimingObserver
+
+queue = MessageQueue()
+executor = Executor(mode=ExecutionMode.THREAD)
+timing = TimingObserver()
 
 @task(
-    on_success=lambda r: print(f"Result: {r.value}"),
-    on_failure=lambda r: print(f"Failed: {r.error}")
+    queue=queue,
+    topic="process.data",
+    executor=executor,
+    on_execute=[timing],  # Observers for profiling
+    on_success=lambda ctx: print(f"Done: {ctx.result}"),
+    on_failure=lambda ctx: print(f"Failed: {ctx.error}"),
 )
-def compute(x, y):
-    return x + y
+def process_data(data):
+    return data.upper()
 
-result = compute(10, 20)
-# Output: Result: 30
+# Direct call - full observer support, returns result
+result = process_data("hello")  # "HELLO"
+
+# Queue trigger - same execution path, same observers
+queue.publish("process.data", "world")
+
+# Both tracked by timing observer
+print(timing.stats)  # {'count': 2, 'avg': 0.001, ...}
 ```
+
+Key features:
+- **Callable-compatible**: Direct calls return results, not wrapped objects
+- **Unified execution**: Direct and queue-triggered use the same path
+- **Observer hooks**: Profile with `TimingObserver`, `MetricsObserver`, etc.
+- **Lifecycle handlers**: `on_success`, `on_failure`, `on_complete`
+- **Auto-publish**: Results published to `{topic}.success` / `{topic}.failure`
 
 ### Executor
 
@@ -97,7 +85,7 @@ from callpyback import MessageQueue
 
 queue = MessageQueue()
 
-@queue.on("events.*")
+@queue.on("events.user")
 def handle_event(message):
     print(f"Received: {message.topic} -> {message.payload}")
 
@@ -108,11 +96,45 @@ queue.publish("events.user", {"action": "login", "user": "alice"})
 @queue.on("math.add")
 def add_handler(message):
     a, b = message.payload["a"], message.payload["b"]
-    return a + b
+    queue.reply(message, a + b)
 
-result = queue.request("math.add", {"a": 10, "b": 20}, timeout=5.0)
-print(result)  # 30
+response = queue.request("math.add", {"a": 10, "b": 20}, timeout=5.0)
+print(response.payload)  # 30
 ```
+
+### Observers
+
+Profile task execution with built-in observers:
+
+```python
+from callpyback import task, TimingObserver, MetricsObserver, observe
+
+timing = TimingObserver(threshold=1.0)  # Alert if > 1s
+metrics = MetricsObserver()
+
+@task(on_execute=[timing, metrics])
+def my_task(x):
+    return x * 2
+
+my_task(21)
+my_task(42)
+
+print(timing.stats)   # {'count': 2, 'avg': 0.001, 'min': ..., 'max': ...}
+print(metrics.stats)  # {'calls': 2, 'successes': 2, 'failures': 0}
+
+# Or use the @observe decorator for simpler cases
+@observe(timing, metrics)
+def simple_function(x):
+    return x + 1
+```
+
+Available observers:
+- `TimingObserver` - Execution timing with threshold alerts
+- `MetricsObserver` - Call counts, success/failure rates
+- `LoggingObserver` - Structured logging
+- `MemoryObserver` - Memory usage tracking
+- `CPUObserver` - CPU usage tracking
+- `MeterObserver` - Running averages (for training loops)
 
 ### RPC
 
@@ -145,6 +167,38 @@ print(client.multiply(5, 6))            # 30 (dynamic method access)
 server.stop()
 ```
 
+### Remote Queue
+
+Bridge message queues across nodes with remote subscriptions:
+
+```python
+from callpyback import MessageQueue, RemoteQueue
+
+# Node 1
+queue1 = MessageQueue()
+remote1 = RemoteQueue(queue1, node_id="node-1")
+
+# Node 2
+queue2 = MessageQueue()
+remote2 = RemoteQueue(queue2, node_id="node-2")
+
+# Connect nodes
+remote1.connect("node-2", queue2)
+remote2.connect("node-1", queue1)
+
+# Subscribe to remote topic
+@remote1.subscribe_remote("node-2", "events.order")
+def handle_order(msg):
+    print(f"Node-1 received: {msg.payload}")
+
+# Publish from node-2 to node-1
+remote2.publish("events.order", {"id": 123, "status": "created"})
+# Output: Node-1 received: {'id': 123, 'status': 'created'}
+
+# Broadcast to all nodes
+remote1.broadcast("events.system", {"action": "shutdown"})
+```
+
 ### Async Support
 
 All components support async/await:
@@ -162,7 +216,7 @@ async def main():
         return msg.payload * 2
     
     result = await queue.request_async("async.task", 21, timeout=5.0)
-    print(result)  # 42
+    print(result.payload)  # 42
     
     # Async executor
     async with Executor(mode=ExecutionMode.THREAD) as executor:
@@ -181,6 +235,8 @@ asyncio.run(main())
 - `TaskRequest` - Task submission request
 - `TaskResult` - Task execution result
 - `TaskStatus` - Enum: PENDING, RUNNING, COMPLETED, FAILED, CANCELLED
+- `TaskContext` - Context passed through task lifecycle
+- `SharedState` - Thread-safe state for observer data sharing
 - `RPCRequest` / `RPCResponse` - RPC message types
 
 ### Transport
@@ -196,6 +252,7 @@ queue = MessageQueue(transport=None)  # Uses MemoryTransport by default
 queue.publish(topic, payload, **headers)  # Publish message
 queue.subscribe(topic, handler)           # Subscribe to topic
 queue.on(topic)                           # Decorator for subscription
+queue.register_task(topic, task_func)     # Register task for topic
 queue.request(topic, payload, timeout)    # Request-reply (sync)
 await queue.request_async(...)            # Request-reply (async)
 ```
@@ -216,16 +273,28 @@ executor.cancel(task_id)
 stats = executor.stats()
 ```
 
-### Pipeline
+### Task Decorator
 
 ```python
-pipeline = Pipeline(executor=None)
+@task(
+    queue=None,           # MessageQueue for pub-sub integration
+    topic=None,           # Topic name (defaults to function name)
+    executor=None,        # Executor instance (defaults to SEQUENTIAL)
+    on_execute=None,      # List of observers for lifecycle hooks
+    on_success=None,      # Handler called on success (receives TaskContext)
+    on_failure=None,      # Handler called on failure (receives TaskContext)
+    on_complete=None,     # Handler called after execution (success or failure)
+    publish_result=True,  # Auto-publish to {topic}.success/{topic}.failure
+)
+def my_task(x):
+    return x * 2
 
-pipeline.pipe(func)           # Add step
-pipeline.on_success(handler)  # Success handler
-pipeline.on_failure(handler)  # Failure handler  
-pipeline.on_complete(handler) # Completion handler (success or failure)
-result = pipeline.run(input)  # Execute pipeline
+# Direct call
+result = my_task(21)  # 42
+
+# Access shared state
+my_task.state.set("key", "value")
+my_task.state.get("key")  # "value"
 ```
 
 ### RPC
@@ -242,6 +311,20 @@ client = RPCClient(queue, service_name="myservice", timeout=30.0)
 result = client.call(method, *args, **kwargs)
 result = await client.call_async(method, *args, **kwargs)
 result = client.method_name(*args)  # Dynamic access
+```
+
+### RemoteQueue
+
+```python
+remote = RemoteQueue(queue, node_id="node-1")
+
+remote.connect(remote_node_id, remote_queue)    # Connect to remote
+remote.disconnect(remote_node_id)               # Disconnect
+remote.subscribe_remote(node_id, topic)(handler)  # Subscribe decorator
+remote.add_remote_subscription(node_id, topic, handler)  # Subscribe
+remote.publish_remote(node_id, topic, payload)  # Publish to remote
+remote.broadcast(topic, payload)                # Broadcast to all nodes
+remote.close()                                  # Cleanup connections
 ```
 
 ## License
