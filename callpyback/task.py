@@ -3,15 +3,15 @@
 import functools
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from callpyback.executor import ExecutionMode, Executor
 from callpyback.types import Message, SharedState, TaskContext
 
 # Type aliases
-Observer = Any  # Will be properly typed when observers are updated
-ContextHandler = Callable[[TaskContext], None]
+ObserverType = Any  # Observer with on_start/on_end/on_error methods
+ContextHandler = Callable[[TaskContext], None]  # Simple callback
 
 
 class TaskPool:
@@ -141,10 +141,10 @@ class TaskRunner:
         topic: Topic name for queue integration
         executor: Executor for task execution
         queue: Optional MessageQueue for pub-sub
-        on_execute: List of observers for lifecycle hooks
-        on_success: Handler called on success
-        on_failure: Handler called on failure
-        on_complete: Handler called after execution
+        on_execute: Observers with on_start/on_end/on_error lifecycle methods
+        on_success: Callback called on success (receives TaskContext)
+        on_failure: Callback called on failure (receives TaskContext)
+        on_complete: Callback called after execution (always runs)
         publish_result: Auto-publish results to queue
         max_instances: Maximum concurrent executions (None = unlimited)
         instance_timeout: Timeout waiting for available slot (None = forever)
@@ -154,12 +154,12 @@ class TaskRunner:
             func=my_func,
             topic="my.topic",
             executor=Executor(),
-            max_instances=3,  # Only 3 concurrent executions
+            max_instances=3,
             on_execute=[TimingObserver()],
             on_success=lambda ctx: print(f"Done: {ctx.result}"),
         )
 
-        result = runner.run("hello")  # Executes with full lifecycle
+        result = runner.run("hello")
     """
 
     def __init__(
@@ -168,7 +168,7 @@ class TaskRunner:
         topic: str,
         executor: Executor,
         queue: Optional[Any] = None,  # MessageQueue, avoid circular import
-        on_execute: Optional[List[Observer]] = None,
+        on_execute: Optional[List[ObserverType]] = None,
         on_success: Optional[ContextHandler] = None,
         on_failure: Optional[ContextHandler] = None,
         on_complete: Optional[ContextHandler] = None,
@@ -335,7 +335,7 @@ def task(
     queue: Optional[Any] = None,
     topic: Optional[str] = None,
     executor: Optional[Executor] = None,
-    on_execute: Optional[List[Observer]] = None,
+    on_execute: Optional[List[ObserverType]] = None,
     on_success: Optional[ContextHandler] = None,
     on_failure: Optional[ContextHandler] = None,
     on_complete: Optional[ContextHandler] = None,

@@ -2,8 +2,12 @@
 
 import functools
 import logging
+import resource
 import threading
 import time
+
+# Optional imports for profiling observers (resource is Unix-only)
+import tracemalloc
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -260,8 +264,6 @@ class MemoryObserver(Observer):
 
     def on_start(self, ctx: ExecutionContext) -> None:
         try:
-            import tracemalloc
-
             tracemalloc.start()
             ctx.metadata[f"{self.name}_tracking"] = True
         except Exception:
@@ -272,8 +274,6 @@ class MemoryObserver(Observer):
             return
 
         try:
-            import tracemalloc
-
             current, peak = tracemalloc.get_traced_memory()
             tracemalloc.stop()
 
@@ -331,8 +331,6 @@ class CPUObserver(Observer):
 
     def on_start(self, ctx: ExecutionContext) -> None:
         try:
-            import resource
-
             usage = resource.getrusage(resource.RUSAGE_SELF)
             ctx.metadata[f"{self.name}_user_start"] = usage.ru_utime
             ctx.metadata[f"{self.name}_sys_start"] = usage.ru_stime
@@ -343,8 +341,6 @@ class CPUObserver(Observer):
         measurement = {}
 
         try:
-            import resource
-
             usage = resource.getrusage(resource.RUSAGE_SELF)
 
             user_start = ctx.metadata.get(f"{self.name}_user_start", 0)
