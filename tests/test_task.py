@@ -12,6 +12,7 @@ from callpyback import (
     MetricsObserver,
     SharedState,
     TaskContext,
+    TaskPool,
     TaskRunner,
     TimingObserver,
     task,
@@ -399,3 +400,163 @@ class TestTaskRunner:
         runner.run(20)
 
         assert timing.stats["count"] == 2
+
+
+class TestTaskPool:
+    def test_pool_creation(self):
+        pool = TaskPool(max_instances=3)
+        assert pool.max_instances == 3
+        assert pool.active == 0
+        assert pool.available == 3
+
+    def test_pool_acquire_release(self):
+        pool = TaskPool(max_instances=2)
+
+        assert pool.acquire()
+        assert pool.active == 1
+        assert pool.available == 1
+
+        assert pool.acquire()
+        assert pool.active == 2
+        assert pool.available == 0
+
+        pool.release()
+        assert pool.active == 1
+        assert pool.available == 1
+
+    def test_pool_stats(self):
+        pool = TaskPool(max_instances=2)
+
+        pool.acquire()
+        pool.release()
+        pool.acquire()
+        pool.release()
+
+        stats = pool.stats
+        assert stats["max"] == 2
+        assert stats["total_processed"] == 2
+        assert stats["active"] == 0
+
+    def test_pool_slot_context_manager(self):
+        pool = TaskPool(max_instances=1)
+
+        with pool.slot() as acquired:
+            assert acquired
+            assert pool.active == 1
+
+        assert pool.active == 0
+
+    def test_pool_non_blocking(self):
+        pool = TaskPool(max_instances=1)
+
+        pool.acquire()  # Take the only slot
+
+        # Non-blocking acquire should fail
+        acquired = pool.acquire(blocking=False)
+        assert not acquired
+        assert pool.active == 1  # Still only 1 active
+
+    def test_pool_timeout(self):
+        pool = TaskPool(max_instances=1)
+
+        pool.acquire()  # Take the only slot
+
+        # Timed acquire should fail after timeout
+        start = time.time()
+        acquired = pool.acquire(blocking=True, timeout=0.1)
+        elapsed = time.time() - start
+
+        assert not acquired
+        assert elapsed >= 0.1
+        assert elapsed < 0.5  # Shouldn't take too long
+
+    def test_pool_invalid_max_instances(self):
+        with pytest.raises(ValueError):
+            TaskPool(max_instances=0)
+
+        with pytest.raises(ValueError):
+            TaskPool(max_instances=-1)
+
+
+class TestTaskWithMaxInstances:
+    def test_task_with_max_instances(self):
+        results = []
+
+        @task(max_instances=2)
+        def limited_task(x):
+            time.sleep(0.05)
+            results.append(x)
+            return x * 2
+
+        assert limited_task.pool is not None
+        assert limited_task.pool.max_instances == 2
+
+        # Run concurrently
+        threads = []
+        for i in range(4):
+            t = threading.Thread(target=limited_task, args=(i,))
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        assert len(results) == 4
+        assert limited_task.pool.stats["total_processed"] == 4
+
+    def test_task_pool_limits_concurrency(self):
+        max_concurrent = [0]
+        current_concurrent = [0]
+        lock = threading.Lock()
+
+        @task(max_instances=2)
+        def tracked_task(x):
+            with lock:
+                current_concurrent[0] += 1
+                max_concurrent[0] = max(max_concurrent[0], current_concurrent[0])
+
+            time.sleep(0.05)
+
+            with lock:
+                current_concurrent[0] -= 1
+
+            return x
+
+        threads = []
+        for i in range(6):
+            t = threading.Thread(target=tracked_task, args=(i,))
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        # Should never exceed max_instances
+        assert max_concurrent[0] <= 2
+
+    def test_task_without_max_instances_has_no_pool(self):
+        @task()
+        def unlimited_task(x):
+            return x
+
+        assert unlimited_task.pool is None
+
+    def test_runner_with_max_instances(self):
+        def my_func(x):
+            time.sleep(0.02)
+            return x * 2
+
+        runner = TaskRunner(
+            func=my_func,
+            topic="test",
+            executor=Executor(),
+            max_instances=2,
+        )
+
+        assert runner.pool is not None
+        assert runner.max_instances == 2
+
+        # Run a few times
+        results = [runner.run(i) for i in range(3)]
+        assert results == [0, 2, 4]
+        assert runner.pool.stats["total_processed"] == 3
