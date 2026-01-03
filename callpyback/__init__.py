@@ -9,9 +9,12 @@ from callpyback.executor import ExecutionMode, Executor
 from callpyback.observers import (
     CallbackObserver,
     CompositeObserver,
+    CPUObserver,
     ExecutionContext,
-    FLOPsObserver,
+    LoggingObserver,
     MemoryObserver,
+    Meter,
+    MeterObserver,
     MetricsObserver,
     Observer,
     TimingObserver,
@@ -19,6 +22,7 @@ from callpyback.observers import (
 )
 from callpyback.pipeline import Pipeline, PipelineStep, task
 from callpyback.queue import MessageQueue
+from callpyback.remote import RemoteQueue, RemoteSubscription
 from callpyback.rpc import RPCClient, RPCServer
 from callpyback.transports import MemoryTransport, Transport
 from callpyback.types import (
@@ -47,6 +51,8 @@ __all__ = [
     "MemoryTransport",
     # Queue
     "MessageQueue",
+    "RemoteQueue",
+    "RemoteSubscription",
     # Executor
     "Executor",
     "ExecutionMode",
@@ -62,9 +68,13 @@ __all__ = [
     "ExecutionContext",
     "TimingObserver",
     "MetricsObserver",
+    "LoggingObserver",
     "MemoryObserver",
-    "FLOPsObserver",
+    "CPUObserver",
     "CompositeObserver",
     "CallbackObserver",
     "observe",
+    # Meters
+    "Meter",
+    "MeterObserver",
 ]

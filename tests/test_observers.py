@@ -7,9 +7,12 @@ import pytest
 from callpyback import (
     CallbackObserver,
     CompositeObserver,
+    CPUObserver,
     ExecutionContext,
-    FLOPsObserver,
+    LoggingObserver,
     MemoryObserver,
+    Meter,
+    MeterObserver,
     MetricsObserver,
     Observer,
     TimingObserver,
@@ -34,7 +37,6 @@ class TestTimingObserver:
 
     def test_threshold_detection(self):
         timing = TimingObserver(threshold=0.01)
-        ctx_metadata = {}
 
         @observe(timing)
         def slow_func():
@@ -145,6 +147,37 @@ class TestMetricsObserver:
         assert metrics.stats["calls"] == 0
 
 
+class TestLoggingObserver:
+    def test_logging_observer_basic(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO)
+        logging_obs = LoggingObserver()
+
+        @observe(logging_obs)
+        def my_func():
+            return 42
+
+        my_func()
+
+        assert "Calling my_func" in caplog.text
+        assert "completed" in caplog.text
+
+    def test_logging_observer_with_args(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO)
+        logging_obs = LoggingObserver(log_args=True)
+
+        @observe(logging_obs)
+        def add(a, b):
+            return a + b
+
+        add(1, 2)
+
+        assert "args=(1, 2)" in caplog.text
+
+
 class TestMemoryObserver:
     def test_tracks_memory(self):
         memory = MemoryObserver()
@@ -157,23 +190,73 @@ class TestMemoryObserver:
         result = allocate()
 
         assert result == 10000
-        # Memory tracking may not work in all environments
         if memory.measurements:
             assert memory.measurements[0]["peak"] > 0
 
 
-class TestFLOPsObserver:
-    def test_tracks_flops_from_metadata(self):
-        flops = FLOPsObserver()
+class TestCPUObserver:
+    def test_tracks_cpu(self):
+        cpu = CPUObserver()
 
-        @observe(flops)
-        def compute():
-            # Simulate reporting FLOPs via observer
-            return 42
+        @observe(cpu)
+        def cpu_work():
+            return sum(i**2 for i in range(10000))
 
-        compute()
-        # Default is 0 if not set in metadata
-        assert flops.stats["count"] == 1
+        cpu_work()
+
+        stats = cpu.stats
+        assert stats["count"] == 1
+
+
+class TestMeter:
+    def test_basic_meter(self):
+        meter = Meter("loss")
+
+        meter.update(0.5)
+        meter.update(0.3)
+        meter.update(0.2)
+
+        assert meter.count == 3
+        assert meter.avg == pytest.approx(1.0 / 3)
+
+    def test_weighted_meter(self):
+        meter = Meter("loss")
+
+        meter.update(0.5, n=10)
+        meter.update(0.3, n=20)
+
+        assert meter.count == 30
+        assert meter.avg == pytest.approx((0.5 * 10 + 0.3 * 20) / 30)
+
+    def test_reset(self):
+        meter = Meter("test")
+
+        meter.update(1.0)
+        meter.update(2.0)
+
+        meter.reset()
+
+        assert meter.count == 0
+        assert meter.avg == 0
+
+
+class TestMeterObserver:
+    def test_meter_observer_basic(self):
+        meter_obs = MeterObserver(
+            {
+                "loss": lambda ctx: ctx.result.get("loss") if ctx.result else None,
+            }
+        )
+
+        @observe(meter_obs)
+        def train_step():
+            return {"loss": 0.5}
+
+        train_step()
+        train_step()
+
+        assert meter_obs.get_meter("loss").count == 2
+        assert meter_obs.get_meter("loss").avg == 0.5
 
 
 class TestCompositeObserver:
@@ -211,6 +294,7 @@ class TestCallbackObserver:
 
     def test_on_end_callback(self):
         results = []
+
         observer = CallbackObserver(on_end=lambda ctx: results.append(ctx.result))
 
         @observe(observer)
@@ -268,6 +352,7 @@ class TestObserveDecorator:
         @observe(timing, metrics)
         def compute(x):
             return x**2
+            return x**2
 
         compute(5)
         compute(10)
@@ -315,3 +400,32 @@ class TestObserveDecorator:
         assert ctx.result == 6
         assert ctx.is_success is True
         assert ctx.execution_time >= 0.01
+
+
+class TestCustomObserver:
+    """Test that users can extend Observer for custom profiling."""
+
+    def test_custom_observer(self):
+        class CustomObserver(Observer):
+            def __init__(self):
+                self.start_count = 0
+                self.end_count = 0
+
+            def on_start(self, ctx):
+                self.start_count += 1
+                ctx.metadata["custom_start"] = True
+
+            def on_end(self, ctx):
+                self.end_count += 1
+                ctx.metadata["custom_end"] = True
+
+        custom = CustomObserver()
+
+        @observe(custom)
+        def my_func():
+            return 42
+
+        my_func()
+
+        assert custom.start_count == 1
+        assert custom.end_count == 1
