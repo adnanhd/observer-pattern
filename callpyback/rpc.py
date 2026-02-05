@@ -48,12 +48,8 @@ class RPCServer:
             return
 
         self._running = True
-        topic = f"{self._service_name}.request"
-
-        def handler(msg: Message):
-            self._handle_request(msg)
-
-        self._queue.subscribe(topic, handler)
+        # Note: We use polling via _serve_loop, NOT subscribe callbacks.
+        # Using both would cause double-handling of every message.
 
         if blocking:
             self._serve_loop()
