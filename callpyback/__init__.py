@@ -21,6 +21,7 @@ from callpyback.observers import (
     observe,
 )
 from callpyback.queue import MessageQueue
+from callpyback.work_queue import QueueFullError, WorkQueue
 from callpyback.remote import RemoteQueue, RemoteSubscription
 from callpyback.rpc import RPCClient, RPCServer
 from callpyback.task import TaskPool, TaskRunner, task
@@ -59,6 +60,9 @@ __all__ = [
     "MessageQueue",
     "RemoteQueue",
     "RemoteSubscription",
+    # Work Queue
+    "WorkQueue",
+    "QueueFullError",
     # Executor
     "Executor",
     "ExecutionMode",
