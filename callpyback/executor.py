@@ -7,6 +7,7 @@ import pickle
 import threading
 import time
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from enum import Enum
 from queue import Queue
 from typing import Any, Callable, Dict, Iterable, List, Optional
@@ -172,8 +173,8 @@ class Executor:
                             worker_id=raw.get("worker_id", ""),
                         )
                     return raw
-                except TimeoutError:
-                    raise
+                except (TimeoutError, FuturesTimeoutError):
+                    raise TimeoutError(f"Task {task_id} timed out")
                 except Exception as e:
                     return TaskResult(
                         task_id=task_id,
