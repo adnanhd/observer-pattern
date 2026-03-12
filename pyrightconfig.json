@@ -1,0 +1,8 @@
+{
+  "include": ["callpyback", "tests", "examples"],
+  "exclude": ["**/__pycache__"],
+  "venvPath": "/home/adhd/.cache/miniconda3/envs",
+  "venv": "UIP",
+  "pythonPath": "/home/adhd/.cache/miniconda3/envs/UIP/bin/python",
+  "pythonVersion": "3.9"
+}
