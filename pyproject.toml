@@ -9,7 +9,7 @@ description = "Message-driven function pipelines with pub-sub, executors, and RP
 authors = [{ name = "Adnan Harun Dogan", email = "adnanharundogan@gmail.com" }]
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.8"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

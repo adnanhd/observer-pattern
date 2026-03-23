@@ -55,7 +55,7 @@ setup(
         "Typing :: Typed",
     ],
     keywords="pipeline message-queue pub-sub executor rpc pydantic",
-    python_requires=">=3.9",
+    python_requires=">=3.8",
     install_requires=[
         "pydantic>=2.0.0",
         "typing-extensions>=4.0.0;python_version<'3.10'",
