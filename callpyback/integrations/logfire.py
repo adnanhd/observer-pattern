@@ -68,7 +68,7 @@ class LogfireObserver(Observer):
             Default: ``ctx.func_name``.
         extract_attributes: A callable that takes an ExecutionContext and
             returns a dict of extra attributes to attach to the span.
-            Called on_end when ctx.result is available. Default: None.
+            Called on_success when ctx.result is available. Default: None.
         log_args: Whether to record function arguments as span attributes.
             Default: False.
         log_result: Whether to record the raw result as a span attribute.
@@ -116,7 +116,7 @@ class LogfireObserver(Observer):
             attributes["kwargs"] = repr(ctx.kwargs) if ctx.kwargs else None
 
         # Use logfire.span() as a context manager — we enter it here
-        # and exit it in on_end/on_error
+        # and exit it in on_success/on_failure
         if self._tags:
             lf = self._logfire.with_tags(*self._tags)
         else:
@@ -129,7 +129,7 @@ class LogfireObserver(Observer):
         with self._lock:
             self._active_spans[ctx_id] = span
 
-    def on_end(self, ctx: ExecutionContext) -> None:
+    def on_success(self, ctx: ExecutionContext) -> None:
         """Close the span, attaching result attributes."""
         ctx_id = id(ctx)
         with self._lock:
@@ -163,9 +163,9 @@ class LogfireObserver(Observer):
             else:
                 span.__exit__(None, None, None)
 
-    def on_error(self, ctx: ExecutionContext) -> None:
+    def on_failure(self, ctx: ExecutionContext) -> None:
         """Close the span with error information."""
-        self.on_end(ctx)
+        self.on_success(ctx)
 
 
 class LogfireMetricLogger:

@@ -9,12 +9,12 @@ from callpyback import (
     ExecutionMode,
     Executor,
     MessageQueue,
-    MetricsObserver,
+    MetricsMeter,
     SharedState,
     TaskContext,
     TaskPool,
     TaskRunner,
-    TimingObserver,
+    TimingMeter,
     task,
 )
 
@@ -167,7 +167,7 @@ class TestTaskDecorator:
         assert complete_calls[0].error is not None
 
     def test_task_with_observer(self):
-        timing = TimingObserver()
+        timing = TimingMeter()
 
         @task(on_execute=[timing])
         def slow_task(x):
@@ -181,10 +181,11 @@ class TestTaskDecorator:
         assert timing.stats["avg"] >= 0.01
 
     def test_task_with_multiple_observers(self):
-        timing = TimingObserver()
-        metrics = MetricsObserver()
+        timing = TimingMeter()
+        # MetricsMeter pulls a number out of ctx.result for each call.
+        calls = MetricsMeter("calls", extract=lambda ctx: 1.0)
 
-        @task(on_execute=[timing, metrics])
+        @task(on_execute=[timing, calls])
         def my_task(x):
             return x + 10
 
@@ -192,8 +193,8 @@ class TestTaskDecorator:
         my_task(10)
 
         assert timing.stats["count"] == 2
-        assert metrics.stats["calls"] == 2
-        assert metrics.stats["successes"] == 2
+        assert calls.stats["count"] == 2
+        assert calls.stats["sum"] == 2.0
 
     def test_task_exposes_state(self):
         @task()
@@ -384,7 +385,7 @@ class TestTaskRunner:
         assert runner.state is runner.state
 
     def test_runner_with_observers(self):
-        timing = TimingObserver()
+        timing = TimingMeter()
 
         def my_func(x):
             return x * 2

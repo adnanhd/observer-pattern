@@ -1,23 +1,29 @@
-"""
-CallPyBack: Message-driven task execution with pub-sub, executors, and RPC.
+"""CallPyBack: event-driven task execution with pluggable dispatch.
 
-This package provides a unified task execution system combining message queues,
-executors, observers, and remote procedure calls for Python function orchestration.
+Unified primitive (``Observable`` + ``Eventful`` + ``Dispatcher``) covers
+in-process pub-sub, cross-process RPC, work queues, parallel fanout, and
+resource-aware load balancing. Meters measure tasks and emit events;
+Reporters subscribe to Meter emissions and ship them externally.
 """
 
 from callpyback.executor import ExecutionMode, Executor
 from callpyback.observers import (
-    CallbackObserver,
-    CompositeObserver,
-    CPUObserver,
+    BroadcastDispatcher,
+    ConcurrentDispatcher,
+    CPUMeter,
+    Dispatcher,
+    Eventful,
     ExecutionContext,
-    LoggingObserver,
-    MemoryObserver,
+    LeastLoadedDispatcher,
+    LoggingReporter,
+    MemoryMeter,
     Meter,
-    MeterObserver,
-    MetricsObserver,
-    Observer,
-    TimingObserver,
+    MetricsMeter,
+    Node,
+    Observable,
+    Reporter,
+    RoundRobinDispatcher,
+    TimingMeter,
     observe,
 )
 from callpyback.queue import MessageQueue
@@ -25,7 +31,12 @@ from callpyback.work_queue import QueueFullError, WorkQueue
 from callpyback.remote import RemoteQueue, RemoteSubscription
 from callpyback.rpc import RoundRobinRPCClient, RPCClient, RPCServer, with_retry
 from callpyback.task import TaskPool, TaskRunner, task
-from callpyback.transports import MemoryTransport, Transport, TCPServerTransport, TCPClientTransport
+from callpyback.transports import (
+    MemoryTransport,
+    TCPClientTransport,
+    TCPServerTransport,
+    Transport,
+)
 from callpyback.types import (
     Message,
     RPCRequest,
@@ -51,6 +62,7 @@ __all__ = [
     "SharedState",
     "RPCRequest",
     "RPCResponse",
+    "ExecutionContext",
     # Transport
     "Transport",
     "MemoryTransport",
@@ -60,7 +72,6 @@ __all__ = [
     "MessageQueue",
     "RemoteQueue",
     "RemoteSubscription",
-    # Work Queue
     "WorkQueue",
     "QueueFullError",
     # Executor
@@ -75,18 +86,24 @@ __all__ = [
     "RPCClient",
     "RoundRobinRPCClient",
     "with_retry",
-    # Observers
-    "Observer",
-    "ExecutionContext",
-    "TimingObserver",
-    "MetricsObserver",
-    "LoggingObserver",
-    "MemoryObserver",
-    "CPUObserver",
-    "CompositeObserver",
-    "CallbackObserver",
+    # Observability core
+    "Observable",
+    "Eventful",
+    "Dispatcher",
+    "Node",
     "observe",
+    # Dispatchers
+    "BroadcastDispatcher",
+    "RoundRobinDispatcher",
+    "ConcurrentDispatcher",
+    "LeastLoadedDispatcher",
     # Meters
     "Meter",
-    "MeterObserver",
+    "TimingMeter",
+    "MemoryMeter",
+    "CPUMeter",
+    "MetricsMeter",
+    # Reporters
+    "Reporter",
+    "LoggingReporter",
 ]

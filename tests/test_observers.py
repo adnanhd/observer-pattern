@@ -1,431 +1,318 @@
-"""Tests for callpyback.observers module."""
+"""Tests for Observable / Eventful / Meter / Reporter and dispatchers."""
 
+from __future__ import annotations
+
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from callpyback import (
-    CallbackObserver,
-    CompositeObserver,
-    CPUObserver,
+    BroadcastDispatcher,
+    ConcurrentDispatcher,
+    Eventful,
     ExecutionContext,
-    LoggingObserver,
-    MemoryObserver,
+    LeastLoadedDispatcher,
     Meter,
-    MeterObserver,
-    MetricsObserver,
-    Observer,
-    TimingObserver,
+    MetricsMeter,
+    Node,
+    Observable,
+    Reporter,
+    RoundRobinDispatcher,
+    TimingMeter,
     observe,
 )
 
 
-class TestTimingObserver:
-    def test_tracks_execution_time(self):
-        timing = TimingObserver()
-
-        @observe(timing)
-        def slow_func():
-            time.sleep(0.05)
-            return "done"
-
-        result = slow_func()
-
-        assert result == "done"
-        assert len(timing.timings) == 1
-        assert timing.timings[0] >= 0.05
-
-    def test_threshold_detection(self):
-        timing = TimingObserver(threshold=0.01)
-
-        @observe(timing)
-        def slow_func():
-            time.sleep(0.05)
-            return "done"
-
-        slow_func()
-
-        stats = timing.stats
-        assert stats["count"] == 1
-        assert stats["avg"] >= 0.05
-
-    def test_stats_calculation(self):
-        timing = TimingObserver()
-
-        @observe(timing)
-        def quick_func():
-            return 42
-
-        for _ in range(5):
-            quick_func()
-
-        stats = timing.stats
-        assert stats["count"] == 5
-        assert stats["min"] <= stats["avg"] <= stats["max"]
-
-    def test_reset(self):
-        timing = TimingObserver()
-
-        @observe(timing)
-        def func():
-            return 1
-
-        func()
-        assert timing.stats["count"] == 1
-
-        timing.reset()
-        assert timing.stats["count"] == 0
+# =============================================================================
+# Eventful primitive
+# =============================================================================
 
 
-class TestMetricsObserver:
-    def test_tracks_calls(self):
-        metrics = MetricsObserver()
+class TestEventful:
+    def test_subscribe_and_fire(self):
+        e = Eventful()
+        results = []
+        e.on(lambda x: results.append(x))
+        e.fire(42)
+        assert results == [42]
 
-        @observe(metrics)
-        def my_func(x):
-            return x * 2
+    def test_broadcast_to_multiple_subscribers(self):
+        e = Eventful()
+        a, b = [], []
+        e.on(lambda x: a.append(x))
+        e.on(lambda x: b.append(x))
+        e.fire("hello")
+        assert a == ["hello"]
+        assert b == ["hello"]
 
-        my_func(1)
-        my_func(2)
-        my_func(3)
+    def test_unsubscribe(self):
+        e = Eventful()
+        results = []
+        fn = e.on(lambda x: results.append(x))
+        e.fire(1)
+        assert e.unsubscribe(fn) is True
+        e.fire(2)
+        assert results == [1]
 
-        stats = metrics.stats
-        assert stats["calls"] == 3
-        assert stats["successes"] == 3
-        assert stats["failures"] == 0
+    def test_failing_subscriber_does_not_stop_chain(self):
+        e = Eventful()
+        ok = []
 
-    def test_tracks_failures(self):
-        metrics = MetricsObserver()
+        def bad(x):
+            raise RuntimeError("boom")
 
-        @observe(metrics)
-        def failing_func():
-            raise ValueError("error")
+        e.on(bad)
+        e.on(lambda x: ok.append(x))
+        e.fire("ping")
+        assert ok == ["ping"]
 
-        for _ in range(3):
-            try:
-                failing_func()
-            except ValueError:
+    def test_round_robin_dispatch(self):
+        e = Eventful(dispatcher=RoundRobinDispatcher())
+        seen = []
+        for i in range(3):
+            e.on(lambda v, _i=i: seen.append((_i, v)))
+        for v in [10, 20, 30, 40]:
+            e.fire(v)
+        assert seen == [(0, 10), (1, 20), (2, 30), (0, 40)]
+
+
+# =============================================================================
+# Observable string-keyed routing
+# =============================================================================
+
+
+class _DemoObservable(Observable):
+    def __init__(self):
+        self.alpha = Eventful()
+        self.beta = Eventful()
+
+
+class TestObservable:
+    def test_string_subscribe_routes_to_attribute(self):
+        obj = _DemoObservable()
+        seen = []
+        obj.on("alpha", lambda v: seen.append(v))
+        obj.alpha.fire(7)
+        assert seen == [7]
+
+    def test_string_fire_routes_to_attribute(self):
+        obj = _DemoObservable()
+        seen = []
+        obj.beta.on(lambda v: seen.append(v))
+        obj.fire("beta", 99)
+        assert seen == [99]
+
+    def test_unknown_event_raises(self):
+        obj = _DemoObservable()
+        with pytest.raises(AttributeError):
+            obj.on("gamma", lambda v: None)
+        with pytest.raises(AttributeError):
+            obj.fire("gamma", 1)
+
+    def test_events_lists_eventful_attributes(self):
+        obj = _DemoObservable()
+        assert set(obj.events()) == {"alpha", "beta"}
+
+
+# =============================================================================
+# Dispatchers
+# =============================================================================
+
+
+class TestDispatchers:
+    def test_broadcast_calls_all(self):
+        seen = []
+        BroadcastDispatcher().dispatch(
+            [lambda x: seen.append(("a", x)), lambda x: seen.append(("b", x))],
+            (5,), {},
+        )
+        assert seen == [("a", 5), ("b", 5)]
+
+    def test_concurrent_uses_executor(self):
+        with ThreadPoolExecutor(2) as pool:
+            seen = []
+            lock = threading.Lock()
+
+            def slow(x):
+                time.sleep(0.01)
+                with lock:
+                    seen.append(x)
+
+            ConcurrentDispatcher(pool).dispatch([slow, slow], (1,), {})
+            pool.shutdown(wait=True)
+            assert seen == [1, 1]
+
+    def test_least_loaded_picks_least_busy(self):
+        class FakeNode:
+            def __init__(self, load_val):
+                self.load_val = load_val
+                self.calls = 0
+
+            def load(self):
+                return self.load_val
+
+            def __call__(self, *a, **kw):
+                self.calls += 1
+
+        n1, n2, n3 = FakeNode(0.8), FakeNode(0.3), FakeNode(0.5)
+        LeastLoadedDispatcher().dispatch([n1, n2, n3], (), {})
+        assert n2.calls == 1
+        assert n1.calls == n3.calls == 0
+
+    def test_least_loaded_raises_when_all_saturated(self):
+        class Sat:
+            def load(self):
+                return 1.0
+
+            def __call__(self, *a, **kw):
                 pass
 
-        stats = metrics.stats
-        assert stats["calls"] == 3
-        assert stats["successes"] == 0
-        assert stats["failures"] == 3
-
-    def test_success_rate(self):
-        metrics = MetricsObserver()
-
-        @observe(metrics)
-        def mixed_func(fail: bool):
-            if fail:
-                raise ValueError("fail")
-            return "ok"
-
-        mixed_func(False)
-        mixed_func(False)
-        try:
-            mixed_func(True)
-        except ValueError:
-            pass
-
-        stats = metrics.stats
-        assert stats["calls"] == 3
-        assert stats["successes"] == 2
-        assert stats["failures"] == 1
-        assert stats["success_rate"] == pytest.approx(2 / 3)
-
-    def test_reset(self):
-        metrics = MetricsObserver()
-
-        @observe(metrics)
-        def func():
-            return 1
-
-        func()
-        metrics.reset()
-
-        assert metrics.stats["calls"] == 0
+        with pytest.raises(RuntimeError, match="saturated"):
+            LeastLoadedDispatcher().dispatch([Sat(), Sat()], (), {})
 
 
-class TestLoggingObserver:
-    def test_logging_observer_basic(self, caplog):
-        import logging
-
-        caplog.set_level(logging.INFO)
-        logging_obs = LoggingObserver()
-
-        @observe(logging_obs)
-        def my_func():
-            return 42
-
-        my_func()
-
-        assert "Calling my_func" in caplog.text
-        assert "completed" in caplog.text
-
-    def test_logging_observer_with_args(self, caplog):
-        import logging
-
-        caplog.set_level(logging.INFO)
-        logging_obs = LoggingObserver(log_args=True)
-
-        @observe(logging_obs)
-        def add(a, b):
-            return a + b
-
-        add(1, 2)
-
-        assert "args=(1, 2)" in caplog.text
+# =============================================================================
+# Node
+# =============================================================================
 
 
-class TestMemoryObserver:
-    def test_tracks_memory(self):
-        memory = MemoryObserver()
+class TestNode:
+    def test_capacity_from_gpus(self):
+        n = Node("w", cpus=16, memory_gb=64, gpus=[0, 1], handler=lambda: None)
+        assert n.capacity == 2
 
-        @observe(memory)
-        def allocate():
-            data = [i for i in range(10000)]
-            return len(data)
+    def test_capacity_from_cpus_when_no_gpu(self):
+        n = Node("w", cpus=8, memory_gb=16, gpus=[], handler=lambda: None)
+        assert n.capacity == 2
 
-        result = allocate()
+    def test_load_tracks_inflight(self):
+        started = threading.Event()
+        released = threading.Event()
 
-        assert result == 10000
-        if memory.measurements:
-            assert memory.measurements[0]["peak"] > 0
+        def slow():
+            started.set()
+            released.wait(timeout=2.0)
+
+        n = Node("w", cpus=4, memory_gb=8, gpus=[0], handler=slow)
+        t = threading.Thread(target=n)
+        t.start()
+        started.wait(timeout=1.0)
+        assert n.load() == 1.0
+        released.set()
+        t.join(timeout=2.0)
+        assert n.load() == 0.0
 
 
-class TestCPUObserver:
-    def test_tracks_cpu(self):
-        cpu = CPUObserver()
-
-        @observe(cpu)
-        def cpu_work():
-            return sum(i**2 for i in range(10000))
-
-        cpu_work()
-
-        stats = cpu.stats
-        assert stats["count"] == 1
+# =============================================================================
+# Meter
+# =============================================================================
 
 
 class TestMeter:
-    def test_basic_meter(self):
-        meter = Meter("loss")
+    def test_aggregator(self):
+        m = Meter("loss")
+        m.update(2.0)
+        m.update(4.0)
+        m.update(6.0)
+        assert m.stats == {"val": 6.0, "avg": 4.0, "sum": 12.0, "count": 3}
 
-        meter.update(0.5)
-        meter.update(0.3)
-        meter.update(0.2)
+    def test_reset_clears_state(self):
+        m = Meter("x")
+        m.update(5.0)
+        m.reset()
+        assert m.stats == {"val": 0.0, "avg": 0.0, "sum": 0.0, "count": 0}
 
-        assert meter.count == 3
-        assert meter.avg == pytest.approx(1.0 / 3)
+    def test_update_event_fires(self):
+        m = Meter("y")
+        seen = []
+        m.update_event.on(lambda meter, val, n: seen.append((meter.name, val, n)))
+        m.update(7.0, n=2)
+        assert seen == [("y", 7.0, 2)]
 
-    def test_weighted_meter(self):
-        meter = Meter("loss")
+    def test_measurement_fires_on_success(self):
+        class _MyMeter(Meter):
+            def measure(self, ctx):
+                return 0.99
 
-        meter.update(0.5, n=10)
-        meter.update(0.3, n=20)
+        m = _MyMeter("acc")
+        seen = []
+        m.measurement.on(lambda meter, val, ctx: seen.append((meter.name, val)))
 
-        assert meter.count == 30
-        assert meter.avg == pytest.approx((0.5 * 10 + 0.3 * 20) / 30)
-
-    def test_reset(self):
-        meter = Meter("test")
-
-        meter.update(1.0)
-        meter.update(2.0)
-
-        meter.reset()
-
-        assert meter.count == 0
-        assert meter.avg == 0
-
-
-class TestMeterObserver:
-    def test_meter_observer_basic(self):
-        meter_obs = MeterObserver(
-            {
-                "loss": lambda ctx: ctx.result.get("loss") if ctx.result else None,
-            }
-        )
-
-        @observe(meter_obs)
-        def train_step():
-            return {"loss": 0.5}
-
-        train_step()
-        train_step()
-
-        assert meter_obs.get_meter("loss").count == 2
-        assert meter_obs.get_meter("loss").avg == 0.5
+        ctx = ExecutionContext(func_name="t", args=(), kwargs={})
+        m.on_success(ctx)
+        assert seen == [("acc", 0.99)]
+        assert m.stats["count"] == 1
+        assert ctx.metadata["acc"] == 0.99
 
 
-class TestCompositeObserver:
-    def test_combines_observers(self):
-        timing = TimingObserver()
-        metrics = MetricsObserver()
-        composite = CompositeObserver([timing, metrics])
+class TestMeterAttach:
+    def test_attach_wires_on_success(self):
+        m = Meter("x")
+        seen = []
+        m.measurement.on(lambda meter, val, ctx: seen.append("fired"))
 
-        @observe(composite)
-        def my_func():
-            return 42
-
-        my_func()
-        my_func()
-
-        assert timing.stats["count"] == 2
-        assert metrics.stats["calls"] == 2
-
-
-class TestCallbackObserver:
-    def test_on_start_callback(self):
-        calls = []
-
-        observer = CallbackObserver(
-            on_start=lambda ctx: calls.append(f"start:{ctx.func_name}")
-        )
-
-        @observe(observer)
-        def my_func():
-            return 1
-
-        my_func()
-
-        assert calls == ["start:my_func"]
-
-    def test_on_end_callback(self):
-        results = []
-
-        observer = CallbackObserver(on_end=lambda ctx: results.append(ctx.result))
-
-        @observe(observer)
-        def compute(x):
-            return x * 2
-
-        compute(21)
-
-        assert results == [42]
-
-    def test_on_error_callback(self):
-        errors = []
-
-        observer = CallbackObserver(on_error=lambda ctx: errors.append(str(ctx.error)))
-
-        @observe(observer)
-        def failing():
-            raise ValueError("test error")
-
-        with pytest.raises(ValueError):
-            failing()
-
-        assert len(errors) == 1
-        assert "test error" in errors[0]
-
-
-class TestObserveDecorator:
-    def test_basic_observe(self):
-        timing = TimingObserver()
-
-        @observe(timing)
-        def add(a, b):
-            return a + b
-
-        result = add(1, 2)
-
-        assert result == 3
-        assert timing.stats["count"] == 1
-
-    def test_on_execute_callback(self):
-        executions = []
-
-        @observe(on_execute=lambda ctx: executions.append(ctx.func_name))
-        def my_func():
-            return 42
-
-        my_func()
-
-        assert executions == ["my_func"]
-
-    def test_multiple_observers(self):
-        timing = TimingObserver()
-        metrics = MetricsObserver()
-
-        @observe(timing, metrics)
-        def compute(x):
-            return x**2
-            return x**2
-
-        compute(5)
-        compute(10)
-
-        assert timing.stats["count"] == 2
-        assert metrics.stats["calls"] == 2
-
-    def test_preserves_function_metadata(self):
-        @observe(TimingObserver())
-        def documented_func(x: int) -> int:
-            """Doubles the input."""
-            return x * 2
-
-        assert documented_func.__name__ == "documented_func"
-        assert "Doubles" in documented_func.__doc__
-
-    def test_exception_propagation(self):
-        metrics = MetricsObserver()
-
-        @observe(metrics)
-        def failing():
-            raise RuntimeError("error")
-
-        with pytest.raises(RuntimeError, match="error"):
-            failing()
-
-        assert metrics.stats["failures"] == 1
-
-    def test_execution_context_properties(self):
-        captured_ctx = []
-
-        observer = CallbackObserver(on_end=lambda ctx: captured_ctx.append(ctx))
-
-        @observe(observer)
-        def func(a, b, c=10):
-            time.sleep(0.01)
-            return a + b + c
-
-        func(1, 2, c=3)
-
-        ctx = captured_ctx[0]
-        assert ctx.func_name == "func"
-        assert ctx.args == (1, 2)
-        assert ctx.kwargs == {"c": 3}
-        assert ctx.result == 6
-        assert ctx.is_success is True
-        assert ctx.execution_time >= 0.01
-
-
-class TestCustomObserver:
-    """Test that users can extend Observer for custom profiling."""
-
-    def test_custom_observer(self):
-        class CustomObserver(Observer):
+        class Source(Observable):
             def __init__(self):
-                self.start_count = 0
-                self.end_count = 0
+                self.start = Eventful()
+                self.success = Eventful()
+                self.failure = Eventful()
+                self.complete = Eventful()
 
-            def on_start(self, ctx):
-                self.start_count += 1
-                ctx.metadata["custom_start"] = True
+        src = Source()
+        m.attach(src)
 
-            def on_end(self, ctx):
-                self.end_count += 1
-                ctx.metadata["custom_end"] = True
+        ctx = ExecutionContext(func_name="t", args=(), kwargs={})
+        src.success.fire(ctx)
+        assert seen == ["fired"]
 
-        custom = CustomObserver()
 
-        @observe(custom)
-        def my_func():
-            return 42
+# =============================================================================
+# Reporter @observe wiring
+# =============================================================================
 
-        my_func()
 
-        assert custom.start_count == 1
-        assert custom.end_count == 1
+class TestReporter:
+    def test_observe_binds_method_to_class_events(self):
+        seen = []
+
+        class _MyReporter(Reporter):
+            @observe(TimingMeter, "measurement")
+            def on_timing(self, meter, val, ctx):
+                seen.append((meter.name, val))
+
+        _MyReporter()  # auto-wires bound method
+
+        t = TimingMeter()
+        ctx = ExecutionContext(
+            func_name="t", args=(), kwargs={},
+            start_time=time.perf_counter() - 0.001,
+        )
+        t.on_start(ctx)
+        t.on_success(ctx)
+        assert seen and seen[0][0] == "timing"
+
+
+# =============================================================================
+# Concrete meters
+# =============================================================================
+
+
+class TestConcreteMeters:
+    def test_timing_meter_measures_elapsed(self):
+        m = TimingMeter()
+        ctx = ExecutionContext(func_name="t", args=(), kwargs={})
+        m.on_start(ctx)
+        time.sleep(0.005)
+        m.on_success(ctx)
+        assert m.stats["count"] == 1
+        assert m.stats["val"] >= 0.004
+
+    def test_metrics_meter_extracts(self):
+        m = MetricsMeter("loss", extract=lambda ctx: ctx.result["loss"])
+        ctx = ExecutionContext(
+            func_name="t", args=(), kwargs={}, result={"loss": 0.42},
+        )
+        m.on_success(ctx)
+        assert m.stats["val"] == 0.42

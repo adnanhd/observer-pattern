@@ -1,27 +1,76 @@
-"""Profiling observers for task execution."""
+"""Event-driven observability + dispatch.
 
-import functools
+Single mechanism (``Observable`` + ``Eventful`` + ``Dispatcher``) covers every
+flow callpyback supports: in-process pub-sub, cross-process RPC, work queues
+with ack/nack, parallel fanout, resource-aware load balancing.
+
+Core concepts
+-------------
+
+``Observable``      Umbrella class holding N ``Eventful`` channels as
+                    attributes. Provides string-keyed ``.on()/.fire()`` that
+                    route to attribute Eventfuls -- so ``task.on("success",
+                    fn)`` and ``task.success.on(fn)`` are equivalent.
+
+``Eventful``        A single pub-sub channel: subscriber list + Dispatcher.
+                    ``.on(fn)`` subscribes, ``.fire(*args)`` invokes the
+                    Dispatcher with the subscriber list.
+
+``Dispatcher``      Delivery policy. The actual VALUE callpyback adds beyond
+                    a plain event bus. Choose Broadcast / RoundRobin /
+                    Concurrent / Queue / Transport / LeastLoaded /
+                    ResourceAware as the run-time backing.
+
+``Node``            Subscriber wrapper with resource metadata (cpus, memory,
+                    gpus, handler) + load metric. Used by resource-aware
+                    dispatchers for cluster-style scheduling.
+
+``Meter``           ``Observable`` subclass with running-average state
+                    (val/avg/sum/count) + ``on_start`` / ``on_success`` /
+                    ``on_failure`` / ``on_complete`` convention methods.
+                    Auto-emits ``"measurement"`` after each ``on_success``.
+
+``Reporter``        ``Observable`` subclass that auto-subscribes methods
+                    marked with ``@observe(MeterCls, "event")`` at
+                    ``__init__`` -- not a task lifecycle listener, only
+                    reacts to upstream Meter emissions.
+
+Lifecycle event names (extensible; just call ``self.fire("name", ...)``):
+
+    "start"      mirrors ``try:`` (before body)
+    "success"    mirrors ``else:`` (clean completion)
+    "failure"    mirrors ``except:`` (exception path)
+    "complete"   mirrors ``finally:`` (always runs)
+"""
+
+from __future__ import annotations
+
 import logging
 import resource
 import threading
 import time
-
-# Optional imports for profiling observers (resource is Unix-only)
 import tracemalloc
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Union
 
 from callpyback.types import TaskContext
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Execution context
+# =============================================================================
 
 
 @dataclass
 class ExecutionContext:
-    """Context passed to observers during execution.
+    """Context passed to listeners during execution.
 
-    Note: This is the legacy context for @observe decorator.
-    For @task decorator, TaskContext is used which has additional fields
-    (task_id, topic, executor, state). Both are compatible with observers.
+    Compatible with :class:`callpyback.types.TaskContext` for fields that
+    overlap (func_name, args, kwargs, result, error, metadata, ...). Use the
+    :class:`Context` alias below for type hints that accept either.
     """
 
     func_name: str
@@ -42,627 +91,593 @@ class ExecutionContext:
         return self.error is None
 
 
-# Type alias: Observers accept either ExecutionContext or TaskContext
-# Both have the same interface (func_name, args, kwargs, result, error, metadata, etc.)
 Context = Union[ExecutionContext, TaskContext]
 
 
-class Observer(ABC):
-    """Base observer for execution profiling.
+# =============================================================================
+# Dispatcher -- delivery policy
+# =============================================================================
 
-    Subclass this to create custom observers for GPU tracking,
-    custom metrics, etc.
 
-    Example:
-        class GPUMemoryObserver(Observer):
-            def on_start(self, ctx):
-                ctx.metadata["gpu_mem_start"] = get_gpu_memory()
+class Dispatcher(ABC):
+    """How an ``Eventful.fire()`` reaches its subscribers.
 
-            def on_end(self, ctx):
-                ctx.metadata["gpu_mem_used"] = (
-                    get_gpu_memory() - ctx.metadata["gpu_mem_start"]
-                )
+    Subclasses implement the actual routing: broadcast to all, round-robin
+    one at a time, concurrent fanout via an executor pool, push to a queue
+    for competing consumers, send over a transport for cross-process
+    delivery, or anything else.
     """
 
     @abstractmethod
-    def on_start(self, ctx: ExecutionContext) -> None:
-        """Called before execution starts."""
-        pass
-
-    @abstractmethod
-    def on_end(self, ctx: ExecutionContext) -> None:
-        """Called after execution ends (success or failure)."""
-        pass
-
-    def on_error(self, ctx: ExecutionContext) -> None:
-        """Called on execution error. Default delegates to on_end."""
-        self.on_end(ctx)
+    def dispatch(
+        self,
+        subscribers: List[Callable],
+        args: tuple,
+        kwargs: Dict[str, Any],
+    ) -> None: ...
 
 
-class TimingObserver(Observer):
-    """Tracks execution timing with threshold alerts.
+class BroadcastDispatcher(Dispatcher):
+    """Default: call every subscriber in order; swallow each one's exceptions."""
 
-    Args:
-        threshold: If set, marks executions exceeding this time (seconds)
-        name: Prefix for metadata keys
+    def dispatch(self, subscribers, args, kwargs):
+        for fn in subscribers:
+            try:
+                fn(*args, **kwargs)
+            except Exception:
+                logger.exception("broadcast subscriber failed: %r", fn)
 
-    Example:
-        timing = TimingObserver(threshold=1.0)
 
-        @observe(timing)
-        def slow_function():
-            time.sleep(2)
+class RoundRobinDispatcher(Dispatcher):
+    """One subscriber per fire, rotating through the list.
 
-        slow_function()
-        print(timing.stats)  # {'count': 1, 'avg': 2.0, ...}
+    Use when subscribers are competing workers and each event should land on
+    exactly ONE worker.
     """
 
-    def __init__(self, threshold: Optional[float] = None, name: str = "timing"):
-        self.threshold = threshold
-        self.name = name
-        self._timings: List[float] = []
+    def __init__(self) -> None:
+        self._idx = 0
         self._lock = threading.Lock()
 
-    def on_start(self, ctx: ExecutionContext) -> None:
-        ctx.metadata[f"{self.name}_start"] = time.perf_counter()
-
-    def on_end(self, ctx: ExecutionContext) -> None:
-        start = ctx.metadata.get(f"{self.name}_start", ctx.start_time)
-        elapsed = time.perf_counter() - start
-
+    def dispatch(self, subscribers, args, kwargs):
+        if not subscribers:
+            return
         with self._lock:
-            self._timings.append(elapsed)
-
-        ctx.metadata[f"{self.name}_elapsed"] = elapsed
-
-        if self.threshold and elapsed > self.threshold:
-            ctx.metadata[f"{self.name}_exceeded"] = True
-
-    @property
-    def timings(self) -> List[float]:
-        with self._lock:
-            return self._timings.copy()
-
-    @property
-    def stats(self) -> Dict[str, float]:
-        with self._lock:
-            if not self._timings:
-                return {"count": 0, "total": 0, "avg": 0, "min": 0, "max": 0}
-            return {
-                "count": len(self._timings),
-                "total": sum(self._timings),
-                "avg": sum(self._timings) / len(self._timings),
-                "min": min(self._timings),
-                "max": max(self._timings),
-            }
-
-    def reset(self) -> None:
-        with self._lock:
-            self._timings.clear()
+            fn = subscribers[self._idx % len(subscribers)]
+            self._idx += 1
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            logger.exception("round-robin subscriber failed: %r", fn)
 
 
-class MetricsObserver(Observer):
-    """Tracks execution metrics (calls, successes, failures).
+class ConcurrentDispatcher(Dispatcher):
+    """Submit each subscriber to an executor pool (thread / process).
 
-    Example:
-        metrics = MetricsObserver()
-
-        @observe(metrics)
-        def my_function():
-            return 42
-
-        my_function()
-        print(metrics.stats)  # {'calls': 1, 'successes': 1, ...}
+    Subscribers run in parallel; fire returns immediately.
     """
 
-    def __init__(self, name: str = "metrics"):
-        self.name = name
-        self._calls = 0
-        self._successes = 0
-        self._failures = 0
+    def __init__(self, executor) -> None:
+        self._executor = executor
+
+    def dispatch(self, subscribers, args, kwargs):
+        for fn in subscribers:
+            try:
+                self._executor.submit(fn, *args, **kwargs)
+            except Exception:
+                logger.exception("concurrent submit failed: %r", fn)
+
+
+class LeastLoadedDispatcher(Dispatcher):
+    """Ask each subscriber for its load and route to the least-loaded.
+
+    Subscribers must expose ``load() -> float`` (e.g. :class:`Node`
+    instances). Saturated subscribers (load >= 1.0) are skipped.
+    """
+
+    def dispatch(self, subscribers, args, kwargs):
+        if not subscribers:
+            return
+        available = [(s, s.load()) for s in subscribers if s.load() < 1.0]
+        if not available:
+            raise RuntimeError("all subscribers saturated")
+        pick = min(available, key=lambda x: x[1])[0]
+        try:
+            pick(*args, **kwargs)
+        except Exception:
+            logger.exception("least-loaded subscriber failed: %r", pick)
+
+
+# =============================================================================
+# Eventful -- a single pub-sub channel
+# =============================================================================
+
+
+class Eventful:
+    """One named pub-sub channel: subscribers + Dispatcher.
+
+    Owned by an :class:`Observable` as an attribute. Subscribers register
+    via ``.on(fn)`` / ``.subscribe(fn)`` and run when ``.fire(*args, **kw)``
+    is called (routed through the channel's :class:`Dispatcher`).
+    """
+
+    def __init__(self, dispatcher: Optional[Dispatcher] = None) -> None:
+        self._subscribers: List[Callable] = []
+        self._dispatcher = dispatcher or BroadcastDispatcher()
         self._lock = threading.Lock()
 
-    def on_start(self, ctx: ExecutionContext) -> None:
+    def subscribe(self, fn: Callable) -> Callable:
+        """Register ``fn`` to receive every fire on this channel. Returns ``fn``."""
         with self._lock:
-            self._calls += 1
+            self._subscribers.append(fn)
+        return fn
 
-    def on_end(self, ctx: ExecutionContext) -> None:
+    # Convenience alias.
+    on = subscribe
+
+    def unsubscribe(self, fn: Callable) -> bool:
         with self._lock:
-            if ctx.is_success:
-                self._successes += 1
-            else:
-                self._failures += 1
+            try:
+                self._subscribers.remove(fn)
+                return True
+            except ValueError:
+                return False
+
+    def fire(self, *args: Any, **kwargs: Any) -> None:
+        """Dispatch to subscribers via the configured Dispatcher."""
+        with self._lock:
+            subs = list(self._subscribers)
+        self._dispatcher.dispatch(subs, args, kwargs)
 
     @property
-    def stats(self) -> Dict[str, Union[int, float]]:
+    def subscribers(self) -> List[Callable]:
         with self._lock:
-            return {
-                "calls": self._calls,
-                "successes": self._successes,
-                "failures": self._failures,
-                "success_rate": self._successes / self._calls if self._calls else 0,
-            }
+            return list(self._subscribers)
 
-    def reset(self) -> None:
-        with self._lock:
-            self._calls = 0
-            self._successes = 0
-            self._failures = 0
+    def set_dispatcher(self, dispatcher: Dispatcher) -> None:
+        self._dispatcher = dispatcher
 
 
-class LoggingObserver(Observer):
-    """Structured logging observer.
+# =============================================================================
+# Observable -- container of Eventful attributes
+# =============================================================================
 
-    Args:
-        logger: Logger instance or name
-        level: Log level (default INFO)
-        log_args: Whether to log function arguments
-        log_result: Whether to log function result
 
-    Example:
-        @observe(LoggingObserver(log_args=True))
-        def my_function(x, y):
-            return x + y
+class Observable:
+    """Umbrella: container of multiple :class:`Eventful` channels.
+
+    Subclasses declare channels in ``__init__`` (or via class-level Eventful
+    attributes initialized in __init_subclass__). Subscribers can access
+    channels two equivalent ways:
+
+      * Attribute style (typo-safe, IDE-friendly)::
+
+            obj.success.on(handler)
+            obj.success.fire(ctx)
+
+      * String style (dynamic, config-driven)::
+
+            obj.on("success", handler)
+            obj.fire("success", ctx)
+
+    The string form looks up the attribute, asserts it is an Eventful, and
+    delegates to it. ``AttributeError`` raised if no such Eventful exists.
     """
+
+    def on(self, event: str, fn: Callable) -> Callable:
+        target = getattr(self, event, None)
+        if not isinstance(target, Eventful):
+            raise AttributeError(
+                f"{type(self).__name__} has no Eventful attribute {event!r}"
+            )
+        return target.subscribe(fn)
+
+    subscribe = on  # alias
+
+    def fire(self, event: str, *args: Any, **kwargs: Any) -> None:
+        target = getattr(self, event, None)
+        if not isinstance(target, Eventful):
+            raise AttributeError(
+                f"{type(self).__name__} has no Eventful attribute {event!r}"
+            )
+        target.fire(*args, **kwargs)
+
+    def events(self) -> List[str]:
+        """List of Eventful attribute names on this instance."""
+        return [
+            name for name in dir(self)
+            if not name.startswith("_") and isinstance(getattr(self, name, None), Eventful)
+        ]
+
+
+# =============================================================================
+# Node -- subscriber with resource metadata + load metric
+# =============================================================================
+
+
+@dataclass
+class Node:
+    """Worker unit: capacity + handler + load tracking.
+
+    Used as a subscriber in resource-aware dispatchers. The ``handler``
+    is the actual callable to invoke (a local function, a GPU worker, an
+    RPC client, ...). ``load()`` reports current utilization in [0, 1].
+
+    Subclass :class:`LocalNode` for in-process workers (counter-based),
+    :class:`RemoteNode` for RPC-backed workers (query the remote side).
+    """
+
+    name: str
+    cpus: int
+    memory_gb: float
+    gpus: List[int]
+    handler: Callable
+    _in_flight: int = field(default=0, init=False, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            self._in_flight += 1
+        try:
+            return self.handler(*args, **kwargs)
+        finally:
+            with self._lock:
+                self._in_flight -= 1
+
+    @property
+    def capacity(self) -> int:
+        """How many concurrent tasks this node can handle. Default: 1 per GPU,
+        or cpus // 4 for CPU-only."""
+        return len(self.gpus) or max(self.cpus // 4, 1)
+
+    def load(self) -> float:
+        """Current utilization in [0, 1]. Override for remote/active query."""
+        with self._lock:
+            return self._in_flight / self.capacity
+
+
+# =============================================================================
+# Meter -- Observable + aggregator + lifecycle convention
+# =============================================================================
+
+
+class Meter(Observable):
+    """Aggregator + lifecycle observer + emission source.
+
+    Three roles in one:
+
+    1. **Aggregator** -- running average across calls. ``update(val, n)``
+       maintains ``val / avg / sum / count``; fires ``self.update_event``
+       on each update.
+
+    2. **Lifecycle observer** -- ``attach(source)`` subscribes
+       ``self.on_start`` / ``on_success`` / ``on_failure`` / ``on_complete``
+       to the matching events on ``source``. Subclasses override
+       ``measure(ctx) -> Optional[float]`` to compute one observation per
+       task call; the default ``on_success`` calls ``measure``, updates
+       the aggregator, and fires ``self.measurement``.
+
+    3. **Emission source** -- ``self.measurement`` and ``self.update_event``
+       are :class:`Eventful` channels Reporters can subscribe to.
+    """
+
+    name: ClassVar[str] = "meter"
 
     def __init__(
         self,
-        logger: Optional[Union[logging.Logger, str]] = None,
-        level: int = logging.INFO,
-        log_args: bool = False,
-        log_result: bool = False,
-        name: str = "logging",
-    ):
-        if logger is None:
-            self.logger = logging.getLogger("callpyback")
-        elif isinstance(logger, str):
-            self.logger = logging.getLogger(logger)
-        else:
-            self.logger = logger
-
-        self.level = level
-        self.log_args = log_args
-        self.log_result = log_result
-        self.name = name
-
-    def on_start(self, ctx: ExecutionContext) -> None:
-        msg = f"Calling {ctx.func_name}"
-        if self.log_args:
-            msg += f" with args={ctx.args}, kwargs={ctx.kwargs}"
-        self.logger.log(self.level, msg)
-
-    def on_end(self, ctx: ExecutionContext) -> None:
-        if ctx.is_success:
-            msg = f"{ctx.func_name} completed in {ctx.execution_time:.4f}s"
-            if self.log_result:
-                msg += f" with result={ctx.result}"
-            self.logger.log(self.level, msg)
-        else:
-            self.logger.error(
-                f"{ctx.func_name} failed after {ctx.execution_time:.4f}s: {ctx.error}"
-            )
-
-
-class MemoryObserver(Observer):
-    """Tracks memory usage during execution using tracemalloc.
-
-    Example:
-        memory = MemoryObserver()
-
-        @observe(memory)
-        def allocate_memory():
-            return [i for i in range(1000000)]
-
-        allocate_memory()
-        print(memory.stats)  # {'count': 1, 'max_peak': ..., ...}
-    """
-
-    def __init__(self, name: str = "memory"):
-        self.name = name
-        self._measurements: List[Dict[str, int]] = []
-        self._lock = threading.Lock()
-
-    def on_start(self, ctx: ExecutionContext) -> None:
-        try:
-            tracemalloc.start()
-            ctx.metadata[f"{self.name}_tracking"] = True
-        except Exception:
-            ctx.metadata[f"{self.name}_tracking"] = False
-
-    def on_end(self, ctx: ExecutionContext) -> None:
-        if not ctx.metadata.get(f"{self.name}_tracking"):
-            return
-
-        try:
-            current, peak = tracemalloc.get_traced_memory()
-            tracemalloc.stop()
-
-            measurement = {"current": current, "peak": peak}
-            ctx.metadata[f"{self.name}_current"] = current
-            ctx.metadata[f"{self.name}_peak"] = peak
-
-            with self._lock:
-                self._measurements.append(measurement)
-        except Exception:
-            pass
-
-    @property
-    def measurements(self) -> List[Dict[str, int]]:
-        with self._lock:
-            return self._measurements.copy()
-
-    @property
-    def stats(self) -> Dict[str, int]:
-        with self._lock:
-            if not self._measurements:
-                return {"count": 0, "avg_current": 0, "avg_peak": 0, "max_peak": 0}
-            return {
-                "count": len(self._measurements),
-                "avg_current": sum(m["current"] for m in self._measurements)
-                // len(self._measurements),
-                "avg_peak": sum(m["peak"] for m in self._measurements)
-                // len(self._measurements),
-                "max_peak": max(m["peak"] for m in self._measurements),
-            }
-
-    def reset(self) -> None:
-        with self._lock:
-            self._measurements.clear()
-
-
-class CPUObserver(Observer):
-    """Tracks CPU usage during execution.
-
-    Example:
-        cpu = CPUObserver()
-
-        @observe(cpu)
-        def cpu_intensive():
-            return sum(i**2 for i in range(1000000))
-
-        cpu_intensive()
-        print(cpu.stats)
-    """
-
-    def __init__(self, name: str = "cpu"):
-        self.name = name
-        self._measurements: List[Dict[str, float]] = []
-        self._lock = threading.Lock()
-
-    def on_start(self, ctx: ExecutionContext) -> None:
-        try:
-            usage = resource.getrusage(resource.RUSAGE_SELF)
-            ctx.metadata[f"{self.name}_user_start"] = usage.ru_utime
-            ctx.metadata[f"{self.name}_sys_start"] = usage.ru_stime
-        except Exception:
-            pass
-
-    def on_end(self, ctx: ExecutionContext) -> None:
-        measurement = {}
-
-        try:
-            usage = resource.getrusage(resource.RUSAGE_SELF)
-
-            user_start = ctx.metadata.get(f"{self.name}_user_start", 0)
-            sys_start = ctx.metadata.get(f"{self.name}_sys_start", 0)
-
-            measurement["user_time"] = usage.ru_utime - user_start
-            measurement["sys_time"] = usage.ru_stime - sys_start
-            measurement["total_cpu_time"] = (
-                measurement["user_time"] + measurement["sys_time"]
-            )
-
-            wall_time = ctx.execution_time
-            if wall_time > 0:
-                measurement["cpu_percent"] = (
-                    measurement["total_cpu_time"] / wall_time
-                ) * 100
-
-            ctx.metadata[f"{self.name}_user_time"] = measurement["user_time"]
-            ctx.metadata[f"{self.name}_sys_time"] = measurement["sys_time"]
-            ctx.metadata[f"{self.name}_percent"] = measurement.get("cpu_percent", 0)
-        except Exception:
-            pass
-
-        if measurement:
-            with self._lock:
-                self._measurements.append(measurement)
-
-    @property
-    def stats(self) -> Dict[str, float]:
-        with self._lock:
-            if not self._measurements:
-                return {"count": 0}
-
-            return {
-                "count": len(self._measurements),
-                "total_user_time": sum(
-                    m.get("user_time", 0) for m in self._measurements
-                ),
-                "total_sys_time": sum(m.get("sys_time", 0) for m in self._measurements),
-                "avg_cpu_percent": sum(
-                    m.get("cpu_percent", 0) for m in self._measurements
-                )
-                / len(self._measurements),
-            }
-
-    def reset(self) -> None:
-        with self._lock:
-            self._measurements.clear()
-
-
-class Meter:
-    """Running average meter for tracking metrics.
-
-    Example:
-        loss_meter = Meter("loss")
-        acc_meter = Meter("accuracy")
-
-        for batch in dataloader:
-            loss = train_step(batch)
-            loss_meter.update(loss, n=batch_size)
-
-        print(loss_meter.avg)
-    """
-
-    def __init__(self, name: str = "meter"):
-        self.name = name
+        name: Optional[str] = None,
+        dispatcher: Optional[Dispatcher] = None,
+    ) -> None:
+        if name is not None:
+            self.name = name
+        # Emission channels
+        self.measurement = Eventful(dispatcher=dispatcher)
+        self.update_event = Eventful(dispatcher=dispatcher)
+        self.reset_event = Eventful(dispatcher=dispatcher)
+        # Aggregator state
         self.reset()
 
+    # ---- aggregator ----------------------------------------------------
+
     def reset(self) -> None:
-        self.val = 0.0
-        self.avg = 0.0
-        self.sum = 0.0
-        self.count = 0
+        self.val: float = 0.0
+        self.avg: float = 0.0
+        self.sum: float = 0.0
+        self.count: int = 0
+        self.reset_event.fire(self)
 
     def update(self, val: float, n: int = 1) -> None:
         self.val = val
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count if self.count > 0 else 0.0
+        self.update_event.fire(self, val, n)
 
     @property
     def stats(self) -> Dict[str, float]:
-        return {
-            "val": self.val,
-            "avg": self.avg,
-            "sum": self.sum,
-            "count": self.count,
-        }
+        return {"val": self.val, "avg": self.avg, "sum": self.sum, "count": self.count}
 
     def __repr__(self) -> str:
-        return f"Meter({self.name}: avg={self.avg:.4f}, count={self.count})"
+        return f"{type(self).__name__}({self.name}: avg={self.avg:.4f}, count={self.count})"
+
+    # ---- lifecycle convention ------------------------------------------
+
+    def measure(self, ctx: Context) -> Optional[float]:
+        """Compute one observation per task call. Default no-op."""
+        return None
+
+    def on_start(self, ctx: Context) -> None:
+        """try: -- before body."""
+
+    def on_success(self, ctx: Context) -> None:
+        """else: -- clean completion. Measures + updates + emits."""
+        val = self.measure(ctx)
+        if val is not None:
+            self.update(val)
+        ctx.metadata[self.name] = val
+        self.measurement.fire(self, val, ctx)
+
+    def on_failure(self, ctx: Context) -> None:
+        """except: -- exception path. Default no-op (no measurement on failure)."""
+
+    def on_complete(self, ctx: Context) -> None:
+        """finally: -- always. Default no-op."""
+
+    def attach(self, source: Observable) -> "Meter":
+        """Wire each ``on_<event>`` method as a subscriber to ``source.<event>``.
+
+        Convention: method ``on_X`` -> subscribed to event ``"X"``. Returns
+        ``self`` for chaining (``Meter().attach(task)``).
+        """
+        for attr in dir(type(self)):
+            if not attr.startswith("on_"):
+                continue
+            method = getattr(self, attr, None)
+            if not callable(method):
+                continue
+            event = attr[3:]
+            channel = getattr(source, event, None)
+            if isinstance(channel, Eventful):
+                channel.subscribe(method)
+        return self
 
 
-class MeterObserver(Observer):
-    """Observer that tracks running averages using Meter.
+# =============================================================================
+# Reporter -- auto-wired subscribers via @observe markers
+# =============================================================================
 
-    Useful for training loops where you want to track loss, accuracy, etc.
 
-    Args:
-        meters: Dict mapping metric names to extract functions
-        reset_on_start: Whether to reset meters on each execution
+class Reporter(Observable):
+    """Observable that auto-subscribes its decorated methods at ``__init__``.
 
-    Example:
-        meter_obs = MeterObserver({
-            "loss": lambda ctx: ctx.result.get("loss"),
-            "accuracy": lambda ctx: ctx.result.get("accuracy"),
-        })
+    Methods marked with ``@observe(TargetCls, "event_name")`` are bound to
+    ``self`` and subscribed to ``TargetCls.<event_name>`` for every instance
+    of ``TargetCls``. Implementation: walks ``type(self)`` looking for
+    ``_observe_targets`` markers placed by the decorator.
 
-        @observe(meter_obs)
-        def train_batch(batch):
-            return {"loss": 0.5, "accuracy": 0.9}
+    Reporters react to upstream Meters (or any Observable). They are NOT
+    task-lifecycle observers themselves.
+
+    Example::
+
+        class LoggingReporter(Reporter):
+            @observe(Meter, "measurement")
+            def log_measurement(self, meter, value, ctx):
+                logger.info("%s = %s", meter.name, value)
     """
+
+    def __init__(self) -> None:
+        # No lifecycle channels by default; subclasses may add their own.
+        # The walker runs unconditionally so subclasses' decorated methods
+        # auto-wire without needing to call any specific super().
+        for attr in dir(type(self)):
+            method = getattr(type(self), attr, None)
+            targets = getattr(method, "_observe_targets", None)
+            if not targets:
+                continue
+            bound = getattr(self, attr)
+            for (target_cls, event) in targets:
+                _register_class_subscriber(target_cls, event, bound)
+
+
+# Class-level subscriber registry: per (Observable subclass, event name)
+# we keep a list of bound methods that should be invoked when any instance
+# of that class fires the event. The Eventful instances themselves consult
+# this map via :func:`_dispatch_class_subscribers`.
+_CLASS_SUBSCRIBERS: Dict[type, Dict[str, List[Callable]]] = {}
+
+
+def _register_class_subscriber(target_cls: type, event: str, fn: Callable) -> None:
+    _CLASS_SUBSCRIBERS.setdefault(target_cls, {}).setdefault(event, []).append(fn)
+
+
+def _dispatch_class_subscribers(instance: Observable, event: str, *args: Any, **kwargs: Any) -> None:
+    """Invoke every class-level subscriber registered for ``type(instance)`` or any
+    ancestor up the MRO. ``args`` is whatever the channel's fire was called
+    with (already includes the firing instance as first arg in Meter's
+    convention), so we just forward unchanged."""
+    for klass in type(instance).__mro__:
+        subs = _CLASS_SUBSCRIBERS.get(klass)
+        if not subs:
+            continue
+        for fn in subs.get(event, []):
+            try:
+                fn(*args, **kwargs)
+            except Exception:
+                logger.exception("class subscriber failed: %r", fn)
+
+
+def observe(target_cls: type, event: str) -> Callable:
+    """Mark a Reporter method as a class-level subscriber to ``target_cls.event``.
+
+    Actual subscription happens at the Reporter instance's ``__init__``,
+    which binds the method to ``self`` and registers it in the class-level
+    subscriber map.
+    """
+
+    def deco(fn: Callable) -> Callable:
+        existing = list(getattr(fn, "_observe_targets", []))
+        existing.append((target_cls, event))
+        fn._observe_targets = existing  # type: ignore[attr-defined]
+        return fn
+
+    return deco
+
+
+# To make class-level subscribers actually fire, we need every Meter's
+# emission channels to consult the registry. We do this by wrapping the
+# Eventful's fire() to also call _dispatch_class_subscribers for the
+# owner instance. Simplest implementation: have Meter subclasses initialize
+# their Eventful channels with a class-aware wrapper.
+#
+# Approach: at Meter.__init__, after creating self.measurement etc., wrap
+# their fire methods to also notify class subscribers using the Meter
+# instance + the channel name.
+
+
+def _wrap_class_aware(meter: Meter, channel_name: str, channel: Eventful) -> None:
+    """Wrap ``channel.fire`` so that after dispatching to instance subscribers,
+    it also fires class-level subscribers registered via :func:`observe`."""
+    original_fire = channel.fire
+
+    def fire(*args: Any, **kwargs: Any) -> None:
+        original_fire(*args, **kwargs)
+        _dispatch_class_subscribers(meter, channel_name, *args, **kwargs)
+
+    channel.fire = fire  # type: ignore[method-assign]
+
+
+# Patch Meter.__init__ to install class-aware wrappers on its channels.
+_original_meter_init = Meter.__init__
+
+
+def _meter_init_with_class_subscribers(
+    self: Meter,
+    name: Optional[str] = None,
+    dispatcher: Optional[Dispatcher] = None,
+) -> None:
+    _original_meter_init(self, name=name, dispatcher=dispatcher)
+    _wrap_class_aware(self, "measurement", self.measurement)
+    _wrap_class_aware(self, "update_event", self.update_event)
+    _wrap_class_aware(self, "reset_event", self.reset_event)
+
+
+Meter.__init__ = _meter_init_with_class_subscribers  # type: ignore[method-assign]
+
+
+# =============================================================================
+# Concrete meters
+# =============================================================================
+
+
+class TimingMeter(Meter):
+    """Tracks per-call elapsed wall time."""
+
+    name = "timing"
+
+    def __init__(self, threshold: Optional[float] = None, name: str = "timing") -> None:
+        super().__init__(name=name)
+        self.threshold = threshold
+
+    def on_start(self, ctx: Context) -> None:
+        ctx.metadata[f"{self.name}_start"] = time.perf_counter()
+
+    def measure(self, ctx: Context) -> float:
+        start = ctx.metadata.get(f"{self.name}_start", ctx.start_time)
+        elapsed = time.perf_counter() - start
+        if self.threshold and elapsed > self.threshold:
+            ctx.metadata[f"{self.name}_exceeded"] = True
+        return elapsed
+
+
+class MemoryMeter(Meter):
+    """Tracks per-call memory delta via :mod:`tracemalloc`."""
+
+    name = "memory"
+
+    def __init__(self, name: str = "memory") -> None:
+        super().__init__(name=name)
+
+    def on_start(self, ctx: Context) -> None:
+        if not tracemalloc.is_tracing():
+            tracemalloc.start()
+        current, _peak = tracemalloc.get_traced_memory()
+        ctx.metadata[f"{self.name}_start"] = current
+
+    def measure(self, ctx: Context) -> float:
+        current, peak = tracemalloc.get_traced_memory()
+        start = ctx.metadata.get(f"{self.name}_start", 0)
+        ctx.metadata[f"{self.name}_peak"] = peak
+        return float(current - start)
+
+
+class CPUMeter(Meter):
+    """Tracks per-call user+system CPU time via :func:`resource.getrusage`."""
+
+    name = "cpu"
+
+    def __init__(self, name: str = "cpu") -> None:
+        super().__init__(name=name)
+
+    def on_start(self, ctx: Context) -> None:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        ctx.metadata[f"{self.name}_start"] = ru.ru_utime + ru.ru_stime
+
+    def measure(self, ctx: Context) -> float:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        start = ctx.metadata.get(f"{self.name}_start", 0.0)
+        return float((ru.ru_utime + ru.ru_stime) - start)
+
+
+class MetricsMeter(Meter):
+    """Pulls a single numeric metric from ``ctx.result`` via an extractor fn."""
 
     def __init__(
         self,
-        meters: Optional[Dict[str, Callable[[ExecutionContext], float]]] = None,
-        reset_on_start: bool = False,
-        name: str = "meter",
-    ):
-        self.name = name
-        self._meter_extractors = meters or {}
-        self._meters: Dict[str, Meter] = {
-            name: Meter(name) for name in self._meter_extractors
-        }
-        self._reset_on_start = reset_on_start
-        self._lock = threading.Lock()
-
-    def add_meter(
-        self, name: str, extractor: Callable[[ExecutionContext], float]
+        name: str,
+        extract: Callable[[Context], Optional[float]],
     ) -> None:
-        """Add a new meter."""
-        with self._lock:
-            self._meter_extractors[name] = extractor
-            self._meters[name] = Meter(name)
+        super().__init__(name=name)
+        self._extract = extract
 
-    def on_start(self, ctx: ExecutionContext) -> None:
-        if self._reset_on_start:
-            self.reset()
-
-    def on_end(self, ctx: ExecutionContext) -> None:
-        if not ctx.is_success:
-            return
-
-        with self._lock:
-            for name, extractor in self._meter_extractors.items():
-                try:
-                    value = extractor(ctx)
-                    if value is not None:
-                        self._meters[name].update(value)
-                except Exception:
-                    pass
-
-    def get_meter(self, name: str) -> Optional[Meter]:
-        return self._meters.get(name)
-
-    @property
-    def stats(self) -> Dict[str, Dict[str, float]]:
-        with self._lock:
-            return {name: meter.stats for name, meter in self._meters.items()}
-
-    def reset(self) -> None:
-        with self._lock:
-            for meter in self._meters.values():
-                meter.reset()
-
-    def summary(self) -> str:
-        lines = []
-        with self._lock:
-            for name, meter in self._meters.items():
-                lines.append(f"{name}: avg={meter.avg:.4f} (n={meter.count})")
-        return " | ".join(lines)
+    def measure(self, ctx: Context) -> Optional[float]:
+        try:
+            return self._extract(ctx)
+        except Exception:
+            return None
 
 
-class CompositeObserver(Observer):
-    """Combines multiple observers.
-
-    Example:
-        composite = CompositeObserver([
-            TimingObserver(),
-            MetricsObserver(),
-            LoggingObserver(),
-        ])
-
-        @observe(composite)
-        def my_function():
-            return 42
-    """
-
-    def __init__(self, observers: List[Observer]):
-        self.observers = observers
-
-    def on_start(self, ctx: ExecutionContext) -> None:
-        for obs in self.observers:
-            try:
-                obs.on_start(ctx)
-            except Exception:
-                pass
-
-    def on_end(self, ctx: ExecutionContext) -> None:
-        for obs in self.observers:
-            try:
-                obs.on_end(ctx)
-            except Exception:
-                pass
-
-    def on_error(self, ctx: ExecutionContext) -> None:
-        for obs in self.observers:
-            try:
-                obs.on_error(ctx)
-            except Exception:
-                pass
+# =============================================================================
+# Concrete reporters
+# =============================================================================
 
 
-class CallbackObserver(Observer):
-    """Observer using callback functions.
+class LoggingReporter(Reporter):
+    """Logs every Meter's ``measurement`` event via stdlib logging.
 
-    Example:
-        observer = CallbackObserver(
-            on_start=lambda ctx: print(f"Starting {ctx.func_name}"),
-            on_end=lambda ctx: print(f"Finished in {ctx.execution_time}s"),
-        )
+    Subscribes to :class:`Meter` (MRO walk catches all subclasses), so a
+    single ``LoggingReporter()`` reports for every Meter instance in the
+    process.
     """
 
     def __init__(
         self,
-        on_start: Optional[Callable[[ExecutionContext], None]] = None,
-        on_end: Optional[Callable[[ExecutionContext], None]] = None,
-        on_error: Optional[Callable[[ExecutionContext], None]] = None,
-    ):
-        self._on_start = on_start
-        self._on_end = on_end
-        self._on_error = on_error
+        level: int = logging.INFO,
+        log_args: bool = False,
+        log_result: bool = False,
+        logger_name: str = "callpyback",
+    ) -> None:
+        self._level = level
+        self._log_args = log_args
+        self._log_result = log_result
+        self._log = logging.getLogger(logger_name)
+        super().__init__()
 
-    def on_start(self, ctx: ExecutionContext) -> None:
-        if self._on_start:
-            self._on_start(ctx)
-
-    def on_end(self, ctx: ExecutionContext) -> None:
-        if self._on_end:
-            self._on_end(ctx)
-
-    def on_error(self, ctx: ExecutionContext) -> None:
-        if self._on_error:
-            self._on_error(ctx)
-        elif self._on_end:
-            self._on_end(ctx)
-
-
-def observe(
-    *observers: Observer,
-    on_execute: Optional[Callable[[ExecutionContext], None]] = None,
-):
-    """Decorator to add observers to a function.
-
-    Args:
-        observers: Observer instances to attach
-        on_execute: Callback called before execution
-
-    Example:
-        @observe(
-            TimingObserver(threshold=1.0),
-            MetricsObserver(),
-            LoggingObserver(),
-        )
-        def my_function(x):
-            return x * 2
-
-        # Or with on_execute callback
-        @observe(on_execute=lambda ctx: print(f"Calling {ctx.func_name}"))
-        def my_function(x):
-            return x * 2
-    """
-
-    def decorator(func: Callable) -> Callable:
-        all_observers = list(observers)
-        if on_execute:
-            all_observers.append(CallbackObserver(on_start=on_execute))
-
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            ctx = ExecutionContext(
-                func_name=func.__name__,
-                args=args,
-                kwargs=kwargs,
-                start_time=time.time(),
-            )
-
-            # Notify start
-            for obs in all_observers:
-                try:
-                    obs.on_start(ctx)
-                except Exception:
-                    pass
-
-            try:
-                result = func(*args, **kwargs)
-                ctx.result = result
-                ctx.end_time = time.time()
-
-                # Notify end
-                for obs in all_observers:
-                    try:
-                        obs.on_end(ctx)
-                    except Exception:
-                        pass
-
-                return result
-
-            except Exception as e:
-                ctx.error = e
-                ctx.end_time = time.time()
-
-                # Notify error
-                for obs in all_observers:
-                    try:
-                        obs.on_error(ctx)
-                    except Exception:
-                        pass
-
-                raise
-
-        wrapper._observers = all_observers
-        return wrapper
-
-    return decorator
+    @observe(Meter, "measurement")
+    def _on_measurement(self, meter: Meter, value: Any, ctx: Context) -> None:
+        msg = f"{meter.name} = {value}"
+        if self._log_args:
+            msg += f" args={ctx.args!r} kwargs={ctx.kwargs!r}"
+        if self._log_result:
+            msg += f" result={ctx.result!r}"
+        self._log.log(self._level, msg)

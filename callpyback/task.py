@@ -1,4 +1,4 @@
-"""Unified task decorator with full lifecycle support."""
+"""Task decorator + TaskRunner -- callable that is also an Observable."""
 
 import functools
 import logging
@@ -8,13 +8,13 @@ from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from callpyback.executor import ExecutionMode, Executor
+from callpyback.observers import Eventful, Meter, Observable
 from callpyback.types import Message, SharedState, TaskContext
 
 logger = logging.getLogger(__name__)
 
-# Type aliases
-ObserverType = Any  # Observer with on_start/on_end/on_error methods
-ContextHandler = Callable[[TaskContext], None]  # Simple callback
+# Type alias for plain callback handlers passed via decorator kwargs.
+ContextHandler = Callable[[TaskContext], None]
 
 
 class TaskPool:
@@ -133,7 +133,7 @@ class TaskPool:
         return self._AcquireContext(self, blocking, timeout)
 
 
-class TaskRunner:
+class TaskRunner(Observable):
     """Unified execution engine for tasks.
 
     Handles both direct calls and queue-triggered execution through
@@ -144,7 +144,7 @@ class TaskRunner:
         topic: Topic name for queue integration
         executor: Executor for task execution
         queue: Optional MessageQueue for pub-sub
-        on_execute: Observers with on_start/on_end/on_error lifecycle methods
+        on_execute: Observers with on_start/on_success/on_failure lifecycle methods
         on_success: Callback called on success (receives TaskContext)
         on_failure: Callback called on failure (receives TaskContext)
         on_complete: Callback called after execution (always runs)
@@ -158,7 +158,7 @@ class TaskRunner:
             topic="my.topic",
             executor=Executor(),
             max_instances=3,
-            on_execute=[TimingObserver()],
+            on_execute=[TimingMeter()],
             on_success=lambda ctx: print(f"Done: {ctx.result}"),
         )
 
@@ -171,7 +171,8 @@ class TaskRunner:
         topic: str,
         executor: Executor,
         queue: Optional[Any] = None,  # MessageQueue, avoid circular import
-        on_execute: Optional[List[ObserverType]] = None,
+        on_execute: Optional[List[Any]] = None,
+        on_start: Optional[ContextHandler] = None,
         on_success: Optional[ContextHandler] = None,
         on_failure: Optional[ContextHandler] = None,
         on_complete: Optional[ContextHandler] = None,
@@ -183,14 +184,45 @@ class TaskRunner:
         self.topic = topic
         self.executor = executor
         self.queue = queue
-        self.on_execute = on_execute or []
-        self.on_success = on_success
-        self.on_failure = on_failure
-        self.on_complete = on_complete
         self.publish_result = publish_result
-        self.state = SharedState()  # Shared across all invocations
+        self.state = SharedState()
 
-        # Pool for concurrency limiting
+        # Lifecycle channels (Observable attributes).
+        self.start: Eventful = Eventful()
+        self.success: Eventful = Eventful()
+        self.failure: Eventful = Eventful()
+        self.complete: Eventful = Eventful()
+
+        # Subscribe Meters / Observables that brought their own ``attach``.
+        for obs in on_execute or []:
+            if isinstance(obs, Meter):
+                obs.attach(self)
+            elif hasattr(obs, "attach"):
+                obs.attach(self)
+            else:
+                # Plain Observer-style object with on_<event> methods:
+                # wire each ``on_X`` method to the matching channel.
+                for attr in dir(type(obs)):
+                    if not attr.startswith("on_"):
+                        continue
+                    method = getattr(obs, attr, None)
+                    if not callable(method):
+                        continue
+                    channel = getattr(self, attr[3:], None)
+                    if isinstance(channel, Eventful):
+                        channel.subscribe(method)
+
+        # Subscribe decorator-kwarg callbacks to their channels.
+        if on_start:
+            self.start.subscribe(on_start)
+        if on_success:
+            self.success.subscribe(on_success)
+        if on_failure:
+            self.failure.subscribe(on_failure)
+        if on_complete:
+            self.complete.subscribe(on_complete)
+
+        # Pool for concurrency limiting.
         self.max_instances = max_instances
         self.instance_timeout = instance_timeout
         self.pool = TaskPool(max_instances) if max_instances else None
@@ -242,17 +274,11 @@ class TaskRunner:
         if self.pool:
             ctx.metadata["pool_stats"] = self.pool.stats
 
+        logger.info("task.start id=%s topic=%s func=%s",
+                    ctx.task_id, self.topic, self.func.__name__)
+        self.start.fire(ctx)
+
         try:
-            logger.info("task.start id=%s topic=%s func=%s", ctx.task_id, self.topic, self.func.__name__)
-
-            # 3. on_execute observers (on_start)
-            for observer in self.on_execute:
-                try:
-                    observer.on_start(ctx)
-                except Exception:
-                    pass  # Don't let observer errors affect execution
-
-            # 4. Execute via executor
             if self.executor.mode == ExecutionMode.SEQUENTIAL:
                 ctx.result = self.func(*args, **kwargs)
             else:
@@ -261,64 +287,14 @@ class TaskRunner:
                 if task_result.is_failure:
                     raise Exception(task_result.error)
                 ctx.result = task_result.value
-
-            ctx.end_time = time.time()
-            logger.info(
-                "task.done id=%s topic=%s elapsed=%.4fs",
-                ctx.task_id, self.topic, ctx.execution_time,
-            )
-
-            # 5. on_success: observers (on_end) + handler
-            for observer in self.on_execute:
-                try:
-                    observer.on_end(ctx)
-                except Exception:
-                    pass
-
-            if self.on_success:
-                try:
-                    self.on_success(ctx)
-                except Exception:
-                    pass
-
-            # 6. Publish success to queue
-            if self.publish_result and self.queue:
-                try:
-                    self.queue.publish(
-                        f"{self.topic}.success",
-                        {
-                            "task_id": ctx.task_id,
-                            "result": ctx.result,
-                            "execution_time": ctx.execution_time,
-                        },
-                    )
-                except Exception:
-                    pass
-
-            return ctx.result
-
         except Exception as e:
             ctx.error = e
             ctx.end_time = time.time()
             logger.warning(
-                "task.error id=%s topic=%s exc=%s elapsed=%.4fs: %s",
+                "task.failure id=%s topic=%s exc=%s elapsed=%.4fs: %s",
                 ctx.task_id, self.topic, type(e).__name__, ctx.execution_time, e,
             )
-
-            # on_failure: observers (on_error) + handler
-            for observer in self.on_execute:
-                try:
-                    observer.on_error(ctx)
-                except Exception:
-                    pass
-
-            if self.on_failure:
-                try:
-                    self.on_failure(ctx)
-                except Exception:
-                    pass
-
-            # Publish failure to queue
+            self.failure.fire(ctx)
             if self.publish_result and self.queue:
                 try:
                     self.queue.publish(
@@ -332,23 +308,36 @@ class TaskRunner:
                     )
                 except Exception:
                     pass
-
             raise
-
-        finally:
-            # 7. on_complete always runs
-            if self.on_complete:
+        else:
+            ctx.end_time = time.time()
+            logger.info(
+                "task.success id=%s topic=%s elapsed=%.4fs",
+                ctx.task_id, self.topic, ctx.execution_time,
+            )
+            self.success.fire(ctx)
+            if self.publish_result and self.queue:
                 try:
-                    self.on_complete(ctx)
+                    self.queue.publish(
+                        f"{self.topic}.success",
+                        {
+                            "task_id": ctx.task_id,
+                            "result": ctx.result,
+                            "execution_time": ctx.execution_time,
+                        },
+                    )
                 except Exception:
                     pass
+            return ctx.result
+        finally:
+            self.complete.fire(ctx)
 
 
 def task(
     queue: Optional[Any] = None,
     topic: Optional[str] = None,
     executor: Optional[Executor] = None,
-    on_execute: Optional[List[ObserverType]] = None,
+    on_execute: Optional[List[Any]] = None,
     on_success: Optional[ContextHandler] = None,
     on_failure: Optional[ContextHandler] = None,
     on_complete: Optional[ContextHandler] = None,
@@ -377,11 +366,11 @@ def task(
         instance_timeout: Timeout in seconds waiting for slot (None = forever)
 
     Example:
-        from callpyback import task, MessageQueue, Executor, TimingObserver
+        from callpyback import task, MessageQueue, Executor, TimingMeter
 
         queue = MessageQueue()
         executor = Executor(mode=ExecutionMode.THREAD)
-        timing = TimingObserver()
+        timing = TimingMeter()
 
         @task(
             queue=queue,
@@ -459,9 +448,17 @@ def task(
 
         # Expose state for external access
         wrapper.state = runner.state
-
-        # Expose pool for monitoring (if max_instances set)
         wrapper.pool = runner.pool
+
+        # Expose runner's Observable surface on the wrapper so callers can
+        # do ``my_task.success.on(handler)`` or ``my_task.on("failure", fn)``.
+        wrapper.start    = runner.start
+        wrapper.success  = runner.success
+        wrapper.failure  = runner.failure
+        wrapper.complete = runner.complete
+        wrapper.on       = runner.on
+        wrapper.fire     = runner.fire
+        wrapper.subscribe = runner.subscribe
 
         return wrapper
 
