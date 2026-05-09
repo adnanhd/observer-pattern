@@ -1,6 +1,7 @@
 """Unified task decorator with full lifecycle support."""
 
 import functools
+import logging
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -8,6 +9,8 @@ from uuid import uuid4
 
 from callpyback.executor import ExecutionMode, Executor
 from callpyback.types import Message, SharedState, TaskContext
+
+logger = logging.getLogger(__name__)
 
 # Type aliases
 ObserverType = Any  # Observer with on_start/on_end/on_error methods
@@ -240,6 +243,8 @@ class TaskRunner:
             ctx.metadata["pool_stats"] = self.pool.stats
 
         try:
+            logger.info("task.start id=%s topic=%s func=%s", ctx.task_id, self.topic, self.func.__name__)
+
             # 3. on_execute observers (on_start)
             for observer in self.on_execute:
                 try:
@@ -258,6 +263,10 @@ class TaskRunner:
                 ctx.result = task_result.value
 
             ctx.end_time = time.time()
+            logger.info(
+                "task.done id=%s topic=%s elapsed=%.4fs",
+                ctx.task_id, self.topic, ctx.execution_time,
+            )
 
             # 5. on_success: observers (on_end) + handler
             for observer in self.on_execute:
@@ -291,6 +300,10 @@ class TaskRunner:
         except Exception as e:
             ctx.error = e
             ctx.end_time = time.time()
+            logger.warning(
+                "task.error id=%s topic=%s exc=%s elapsed=%.4fs: %s",
+                ctx.task_id, self.topic, type(e).__name__, ctx.execution_time, e,
+            )
 
             # on_failure: observers (on_error) + handler
             for observer in self.on_execute:
