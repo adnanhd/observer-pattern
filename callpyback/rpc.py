@@ -13,7 +13,15 @@ from callpyback.types import Message, RPCRequest, RPCResponse
 
 
 class RPCServer:
-    """RPC server that handles method calls via message queue."""
+    """RPC server: handles method calls as Eventful subscribers on the
+    request topic instead of polling.
+
+    Each :meth:`add_method` call attaches a handler to the request
+    topic's underlying :class:`Eventful`, so incoming RPC requests are
+    dispatched via the queue's pub-sub machinery (transport -> topic
+    Eventful -> handler) with no dedicated serve loop. ``serve(blocking=True)``
+    just blocks the calling thread on a stop-event instead of polling.
+    """
 
     def __init__(
         self,
@@ -26,7 +34,8 @@ class RPCServer:
         self._service_name = service_name
         self._methods: Dict[str, Callable] = {}
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._sub_id: Optional[str] = None
+        self._stop_event = threading.Event()
 
     def register(self, name: Optional[str] = None) -> Callable:
         """Decorator to register RPC method."""
@@ -43,44 +52,40 @@ class RPCServer:
         self._methods[name] = func
 
     def serve(self, blocking: bool = True) -> None:
-        """Start serving RPC requests."""
+        """Subscribe the dispatch handler to the request topic. When
+        ``blocking=True``, block the calling thread until :meth:`stop`
+        is called (or the process is killed); otherwise return
+        immediately and let the transport's delivery thread invoke the
+        handler in the background."""
         if self._running:
             return
-
         self._running = True
-        # Note: We use polling via _serve_loop, NOT subscribe callbacks.
-        # Using both would cause double-handling of every message.
-
+        self._stop_event.clear()
+        topic = f"{self._service_name}.request"
+        self._sub_id = self._queue.on(topic, self._handle_request)
         if blocking:
-            self._serve_loop()
-        else:
-            self._thread = threading.Thread(target=self._serve_loop, daemon=True)
-            self._thread.start()
+            try:
+                while not self._stop_event.is_set():
+                    self._stop_event.wait(timeout=1.0)
+            except KeyboardInterrupt:
+                pass
 
     async def serve_async(self) -> None:
-        """Serve requests asynchronously."""
+        """Async variant: subscribe + await stop event."""
         self._running = True
+        self._stop_event.clear()
         topic = f"{self._service_name}.request"
-
-        while self._running:
-            msg = await self._queue.receive_async(topic, timeout=1.0)
-            if msg:
-                await self._handle_request_async(msg)
+        self._sub_id = self._queue.on(topic, self._handle_request)
+        while not self._stop_event.is_set():
+            await asyncio.sleep(0.1)
 
     def stop(self) -> None:
-        """Stop serving."""
+        """Unsubscribe + release the blocked serve thread."""
         self._running = False
-        if self._thread:
-            self._thread.join(timeout=5.0)
-            self._thread = None
-
-    def _serve_loop(self) -> None:
-        """Main serving loop."""
-        topic = f"{self._service_name}.request"
-        while self._running:
-            msg = self._queue.receive(topic, timeout=1.0)
-            if msg:
-                self._handle_request(msg)
+        self._stop_event.set()
+        if self._sub_id is not None:
+            self._queue.unsubscribe(self._sub_id)
+            self._sub_id = None
 
     def _handle_request(self, msg: Message) -> None:
         """Handle incoming RPC request."""
