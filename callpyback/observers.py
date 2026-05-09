@@ -199,12 +199,28 @@ class Eventful:
     Owned by an :class:`Observable` as an attribute. Subscribers register
     via ``.on(fn)`` / ``.subscribe(fn)`` and run when ``.fire(*args, **kw)``
     is called (routed through the channel's :class:`Dispatcher`).
+
+    If constructed with ``owner`` + ``name`` (typically done by Observable
+    subclasses), ``fire`` ALSO dispatches to class-level subscribers
+    registered via :func:`observe` against any class in the owner's MRO.
+    This is the mechanism behind :class:`Reporter`'s auto-wiring.
     """
 
-    def __init__(self, dispatcher: Optional[Dispatcher] = None) -> None:
+    def __init__(
+        self,
+        dispatcher: Optional[Dispatcher] = None,
+        *,
+        owner: Optional["Observable"] = None,
+        name: Optional[str] = None,
+    ) -> None:
         self._subscribers: List[Callable] = []
         self._dispatcher = dispatcher or BroadcastDispatcher()
         self._lock = threading.Lock()
+        # When owner+name are set, fire() also walks owner's MRO for
+        # class-level subscribers. Avoids the previous monkey-patch
+        # approach where Meter.__init__ was rewritten to wrap channel.fire.
+        self._owner = owner
+        self._name = name
 
     def subscribe(self, fn: Callable) -> Callable:
         """Register ``fn`` to receive every fire on this channel. Returns ``fn``."""
@@ -224,10 +240,29 @@ class Eventful:
                 return False
 
     def fire(self, *args: Any, **kwargs: Any) -> None:
-        """Dispatch to subscribers via the configured Dispatcher."""
+        """Dispatch to instance subscribers (via Dispatcher) and then to
+        class-level subscribers registered via :func:`observe`, if this
+        Eventful was constructed with ``owner`` + ``name``.
+        """
         with self._lock:
             subs = list(self._subscribers)
         self._dispatcher.dispatch(subs, args, kwargs)
+
+        if self._owner is not None and self._name is not None:
+            for klass in type(self._owner).__mro__:
+                if klass is object:
+                    continue
+                cls_subs = _CLASS_SUBSCRIBERS.get(klass, {}).get(self._name)
+                if not cls_subs:
+                    continue
+                for fn in cls_subs:
+                    try:
+                        fn(*args, **kwargs)
+                    except Exception:
+                        logger.exception(
+                            "class subscriber for %s.%s failed: %r",
+                            klass.__name__, self._name, fn,
+                        )
 
     @property
     def subscribers(self) -> List[Callable]:
@@ -371,9 +406,13 @@ class Meter(Observable):
         if name is not None:
             self.name = name
         # Emission channels
-        self.measurement = Eventful(dispatcher=dispatcher)
-        self.update_event = Eventful(dispatcher=dispatcher)
-        self.reset_event = Eventful(dispatcher=dispatcher)
+        # owner+name make these Eventfuls class-subscriber-aware: when fire
+        # is called, the Eventful walks ``type(self).__mro__`` looking for
+        # class-level subscribers registered via :func:`observe`. No
+        # monkey-patching required.
+        self.measurement = Eventful(dispatcher=dispatcher, owner=self, name="measurement")
+        self.update_event = Eventful(dispatcher=dispatcher, owner=self, name="update_event")
+        self.reset_event = Eventful(dispatcher=dispatcher, owner=self, name="reset_event")
         # Aggregator state
         self.reset()
 
@@ -482,8 +521,9 @@ class Reporter(Observable):
 
 # Class-level subscriber registry: per (Observable subclass, event name)
 # we keep a list of bound methods that should be invoked when any instance
-# of that class fires the event. The Eventful instances themselves consult
-# this map via :func:`_dispatch_class_subscribers`.
+# of that class fires the corresponding event. Consulted directly by
+# :meth:`Eventful.fire` when the eventful was constructed with
+# ``owner`` + ``name``.
 _CLASS_SUBSCRIBERS: Dict[type, Dict[str, List[Callable]]] = {}
 
 
@@ -491,28 +531,15 @@ def _register_class_subscriber(target_cls: type, event: str, fn: Callable) -> No
     _CLASS_SUBSCRIBERS.setdefault(target_cls, {}).setdefault(event, []).append(fn)
 
 
-def _dispatch_class_subscribers(instance: Observable, event: str, *args: Any, **kwargs: Any) -> None:
-    """Invoke every class-level subscriber registered for ``type(instance)`` or any
-    ancestor up the MRO. ``args`` is whatever the channel's fire was called
-    with (already includes the firing instance as first arg in Meter's
-    convention), so we just forward unchanged."""
-    for klass in type(instance).__mro__:
-        subs = _CLASS_SUBSCRIBERS.get(klass)
-        if not subs:
-            continue
-        for fn in subs.get(event, []):
-            try:
-                fn(*args, **kwargs)
-            except Exception:
-                logger.exception("class subscriber failed: %r", fn)
-
-
 def observe(target_cls: type, event: str) -> Callable:
-    """Mark a Reporter method as a class-level subscriber to ``target_cls.event``.
+    """Mark a Reporter method as a class-level subscriber to
+    ``target_cls.<event>``.
 
-    Actual subscription happens at the Reporter instance's ``__init__``,
-    which binds the method to ``self`` and registers it in the class-level
-    subscriber map.
+    The actual subscription happens at the Reporter instance's
+    ``__init__``, which binds the method to ``self`` and registers it
+    via :func:`_register_class_subscriber`. When any instance of
+    ``target_cls`` (or a subclass) fires the matching event, the bound
+    method is invoked.
     """
 
     def deco(fn: Callable) -> Callable:
@@ -522,47 +549,6 @@ def observe(target_cls: type, event: str) -> Callable:
         return fn
 
     return deco
-
-
-# To make class-level subscribers actually fire, we need every Meter's
-# emission channels to consult the registry. We do this by wrapping the
-# Eventful's fire() to also call _dispatch_class_subscribers for the
-# owner instance. Simplest implementation: have Meter subclasses initialize
-# their Eventful channels with a class-aware wrapper.
-#
-# Approach: at Meter.__init__, after creating self.measurement etc., wrap
-# their fire methods to also notify class subscribers using the Meter
-# instance + the channel name.
-
-
-def _wrap_class_aware(meter: Meter, channel_name: str, channel: Eventful) -> None:
-    """Wrap ``channel.fire`` so that after dispatching to instance subscribers,
-    it also fires class-level subscribers registered via :func:`observe`."""
-    original_fire = channel.fire
-
-    def fire(*args: Any, **kwargs: Any) -> None:
-        original_fire(*args, **kwargs)
-        _dispatch_class_subscribers(meter, channel_name, *args, **kwargs)
-
-    channel.fire = fire  # type: ignore[method-assign]
-
-
-# Patch Meter.__init__ to install class-aware wrappers on its channels.
-_original_meter_init = Meter.__init__
-
-
-def _meter_init_with_class_subscribers(
-    self: Meter,
-    name: Optional[str] = None,
-    dispatcher: Optional[Dispatcher] = None,
-) -> None:
-    _original_meter_init(self, name=name, dispatcher=dispatcher)
-    _wrap_class_aware(self, "measurement", self.measurement)
-    _wrap_class_aware(self, "update_event", self.update_event)
-    _wrap_class_aware(self, "reset_event", self.reset_event)
-
-
-Meter.__init__ = _meter_init_with_class_subscribers  # type: ignore[method-assign]
 
 
 # =============================================================================
