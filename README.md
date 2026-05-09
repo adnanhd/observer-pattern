@@ -2,15 +2,35 @@
 
 Message-driven task execution with pub-sub, executors, and RPC.
 
+`callpyback` is the **execution / dispatch** layer. Pair it with
+[`registry-pattern`](https://github.com/adnanhd/registry-pattern) for the
+**validation / serialization** layer:
+
+- `registry-pattern` builds JSON-safe envelopes from your domain objects.
+- `callpyback` ships them across threads, processes, or the network and
+  runs the work on the other end.
+
+The library is useful as a standalone in-process task runner too -- the
+single-process path bypasses all transport overhead.
+
 ## Installation
 
 ```bash
 pip install callpyback
-
-# Optional transports
-pip install callpyback[redis]
-pip install callpyback[zmq]
 ```
+
+Core install pulls only `pydantic` + `typing-extensions`. The TCP
+transport is stdlib. Optional integrations (Pydantic Logfire, etc.)
+have their own extras documented in `docs/`.
+
+## When to use which queue
+
+| You want... | Use |
+|---|---|
+| Local pub-sub in one process | `MessageQueue(transport=MemoryTransport())` |
+| Competing-consumer work queue with ack/nack + DLQ | `WorkQueue` (extends MessageQueue) |
+| Cross-process / cross-machine pub-sub or RPC | `MessageQueue(transport=TCPServerTransport(...))` and `TCPClientTransport(...)` on the client |
+| RPC over an existing queue | `RPCServer(queue)` / `RPCClient(queue)` |
 
 ## Quick Start
 
@@ -227,6 +247,36 @@ async def main():
 asyncio.run(main())
 ```
 
+## Distributed execution: local builds, remote runs
+
+The intended deployment for ML / data pipelines:
+
+- **Local** process builds work envelopes (`registry-pattern.serialize`)
+  and dispatches them via `RPCClient`.
+- **Remote** workers run `RPCServer` on a TCP port, accept envelopes,
+  reconstruct objects with `registry.build(...)`, run the work, return
+  JSON-friendly results.
+- callpyback owns the wire (JSON over TCP, no pickle); registry-pattern
+  owns the schema (Pydantic validation on both ends).
+
+See `examples/06_registry_integration.py` for the in-process version
+and `examples/07_distributed_workers.py` for the cross-process variant
+with N workers + round-robin client.
+
+## Logging
+
+Core lifecycle events emit stdlib `logging` at INFO -- no observer
+needed for basic visibility:
+
+```python
+import logging
+logging.basicConfig(level=logging.INFO)
+# now @task calls emit task.start / task.done / task.error
+```
+
+`LoggingObserver` stays for the case where you want args/result detail
+beyond the default.
+
 ## API Reference
 
 ### Types
@@ -243,6 +293,8 @@ asyncio.run(main())
 
 - `Transport` - Abstract base for message transports
 - `MemoryTransport` - In-memory transport (default)
+- `TCPServerTransport(host, port)` / `TCPClientTransport(host, port)` --
+  JSON-over-TCP across processes / machines
 
 ### MessageQueue
 
