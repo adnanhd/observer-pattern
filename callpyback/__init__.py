@@ -23,7 +23,7 @@ from callpyback.observers import (
 from callpyback.queue import MessageQueue
 from callpyback.work_queue import QueueFullError, WorkQueue
 from callpyback.remote import RemoteQueue, RemoteSubscription
-from callpyback.rpc import RPCClient, RPCServer
+from callpyback.rpc import RoundRobinRPCClient, RPCClient, RPCServer, with_retry
 from callpyback.task import TaskPool, TaskRunner, task
 from callpyback.transports import MemoryTransport, Transport, TCPServerTransport, TCPClientTransport
 from callpyback.types import (
@@ -73,6 +73,8 @@ __all__ = [
     # RPC
     "RPCServer",
     "RPCClient",
+    "RoundRobinRPCClient",
+    "with_retry",
     # Observers
     "Observer",
     "ExecutionContext",

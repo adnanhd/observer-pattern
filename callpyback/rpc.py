@@ -4,7 +4,7 @@ import asyncio
 import functools
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from callpyback.executor import ExecutionMode, Executor
@@ -223,3 +223,93 @@ class RPCClient:
             return self.call(name, *args, **kwargs)
 
         return caller
+
+
+class RoundRobinRPCClient:
+    """Dispatch RPC calls round-robin across a pool of ``RPCClient`` instances.
+
+    Each underlying client typically connects to a different worker process
+    (or remote host). Useful when you have N workers serving the same set
+    of RPC methods and want trivial load balance without an external proxy.
+
+    Example::
+
+        clients = [
+            RPCClient(MessageQueue(transport=TCPClientTransport("worker1", 9090))),
+            RPCClient(MessageQueue(transport=TCPClientTransport("worker2", 9090))),
+        ]
+        lb = RoundRobinRPCClient(clients)
+        result = lb.call("train_step", envelope)
+    """
+
+    def __init__(self, clients: List["RPCClient"]):
+        if not clients:
+            raise ValueError("RoundRobinRPCClient requires at least one RPCClient")
+        self._clients: List[RPCClient] = list(clients)
+        self._idx = 0
+        self._lock = threading.Lock()
+
+    def _next_client(self) -> "RPCClient":
+        with self._lock:
+            client = self._clients[self._idx]
+            self._idx = (self._idx + 1) % len(self._clients)
+        return client
+
+    def call(self, method: str, *args, timeout: Optional[float] = None, **kwargs) -> Any:
+        return self._next_client().call(method, *args, timeout=timeout, **kwargs)
+
+    def __getattr__(self, name: str) -> Callable:
+        def caller(*args, **kwargs):
+            return self.call(name, *args, **kwargs)
+
+        return caller
+
+
+def with_retry(
+    client: "RPCClient",
+    *,
+    max_retries: int = 3,
+    backoff_initial: float = 0.1,
+    backoff_factor: float = 2.0,
+    retry_on: Tuple[type, ...] = (TimeoutError, ConnectionError),
+) -> "RPCClient":
+    """Wrap ``client`` so each ``call()`` retries up to ``max_retries`` times.
+
+    Exponential backoff: ``backoff_initial`` seconds before retry 1,
+    multiplied by ``backoff_factor`` each subsequent attempt.
+
+    Only the exception types in ``retry_on`` trigger a retry; everything
+    else propagates immediately so application errors aren't masked.
+    """
+
+    class _RetryingClient:
+        def __init__(self) -> None:
+            self._client = client
+            self._max_retries = max_retries
+            self._backoff_initial = backoff_initial
+            self._backoff_factor = backoff_factor
+            self._retry_on = retry_on
+
+        def call(self, method: str, *args, **kwargs) -> Any:
+            delay = self._backoff_initial
+            last_exc: Optional[BaseException] = None
+            for attempt in range(self._max_retries + 1):
+                try:
+                    return self._client.call(method, *args, **kwargs)
+                except self._retry_on as exc:
+                    last_exc = exc
+                    if attempt == self._max_retries:
+                        raise
+                    time.sleep(delay)
+                    delay *= self._backoff_factor
+            # Unreachable, but keeps mypy happy
+            assert last_exc is not None
+            raise last_exc  # pragma: no cover
+
+        def __getattr__(self, name: str) -> Callable:
+            def caller(*args, **kwargs):
+                return self.call(name, *args, **kwargs)
+
+            return caller
+
+    return _RetryingClient()  # type: ignore[return-value]
