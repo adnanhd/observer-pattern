@@ -1,6 +1,7 @@
 """Unified executor with sequential, thread, and process modes."""
 
 import asyncio
+import logging
 import multiprocessing as mp
 import os
 import pickle
@@ -14,6 +15,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 from uuid import uuid4
 
 from callpyback.types import TaskRequest, TaskResult, TaskStatus
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionMode(str, Enum):
@@ -86,6 +89,7 @@ class Executor:
             self._pool = ProcessPoolExecutor(max_workers=self._max_workers)
 
         self._running = True
+        logger.info("executor.start mode=%s max_workers=%d", self._mode.value, self._max_workers)
 
     def stop(self, wait: bool = True) -> None:
         """Stop executor pool."""
@@ -97,6 +101,7 @@ class Executor:
             self._pool = None
 
         self._running = False
+        logger.info("executor.stop mode=%s", self._mode.value)
 
     def submit(
         self,
