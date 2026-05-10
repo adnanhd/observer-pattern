@@ -4,7 +4,6 @@ import asyncio
 import logging
 import multiprocessing as mp
 import os
-import pickle
 import threading
 import time
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
@@ -27,19 +26,21 @@ class ExecutionMode(str, Enum):
     PROCESS = "process"
 
 
-def _execute_in_process(task_data: bytes) -> Dict[str, Any]:
-    """Execute task in separate process (must be picklable)."""
+def _run_with_timing(
+    task_id: str, func: Callable, args: tuple, kwargs: dict
+) -> Dict[str, Any]:
+    """Worker entry: time the call and return a structured result.
+
+    Submitted directly to ProcessPoolExecutor, which pickles ``func`` /
+    ``args`` / ``kwargs`` internally (a Python fundamental for cross-process
+    dispatch). The previous custom ``pickle.dumps`` / ``pickle.loads`` layer
+    around this function was redundant -- removed.
+    """
     start = time.time()
     try:
-        task = pickle.loads(task_data)
-        func = task["func"]
-        args = task["args"]
-        kwargs = task["kwargs"]
-
         result = func(*args, **kwargs)
-
         return {
-            "task_id": task["task_id"],
+            "task_id": task_id,
             "status": "completed",
             "value": result,
             "error": None,
@@ -48,7 +49,7 @@ def _execute_in_process(task_data: bytes) -> Dict[str, Any]:
         }
     except Exception as e:
         return {
-            "task_id": task.get("task_id", "unknown"),
+            "task_id": task_id,
             "status": "failed",
             "value": None,
             "error": str(e),
@@ -127,11 +128,9 @@ class Executor:
                     self._execute_sync, task_id, func, args, kwargs
                 )
             else:
-                # Process mode - need to pickle
-                task_data = pickle.dumps(
-                    {"task_id": task_id, "func": func, "args": args, "kwargs": kwargs}
-                )
-                future = self._pool.submit(_execute_in_process, task_data)
+                # Process mode: ProcessPoolExecutor pickles func/args/kwargs
+                # internally to ship them to the worker.
+                future = self._pool.submit(_run_with_timing, task_id, func, args, kwargs)
 
             with self._lock:
                 self._futures[task_id] = future
