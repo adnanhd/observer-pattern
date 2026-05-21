@@ -76,16 +76,18 @@ class MessageQueue(Observable):
     def on(self, event_or_topic: str, fn: Optional[Handler] = None):
         """Subscribe ``fn`` to ``event_or_topic``. Two forms:
 
-          - ``queue.on("topic", handler)`` -- subscribe directly,
-            returns a ``handler_id`` string.
-          - ``@queue.on("topic")`` -- decorator form; returns a decorator
-            that subscribes the decorated function and returns it
-            unchanged (so the function name stays usable in code).
+        - ``queue.on("topic", handler)`` -- subscribe directly,
+          returns a ``handler_id`` string.
+        - ``@queue.on("topic")`` -- decorator form; returns a decorator
+          that subscribes the decorated function and returns it
+          unchanged (so the function name stays usable in code).
         """
         if fn is None:
+
             def deco(handler: Handler) -> Handler:
                 self.subscribe(event_or_topic, handler)
                 return handler
+
             return deco
         return self.subscribe(event_or_topic, fn)
 

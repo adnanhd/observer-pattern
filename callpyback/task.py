@@ -274,8 +274,12 @@ class TaskRunner(Observable):
         if self.pool:
             ctx.metadata["pool_stats"] = self.pool.stats
 
-        logger.info("task.start id=%s topic=%s func=%s",
-                    ctx.task_id, self.topic, self.func.__name__)
+        logger.info(
+            "task.start id=%s topic=%s func=%s",
+            ctx.task_id,
+            self.topic,
+            self.func.__name__,
+        )
         self.start.fire(ctx)
 
         try:
@@ -292,7 +296,11 @@ class TaskRunner(Observable):
             ctx.end_time = time.time()
             logger.warning(
                 "task.failure id=%s topic=%s exc=%s elapsed=%.4fs: %s",
-                ctx.task_id, self.topic, type(e).__name__, ctx.execution_time, e,
+                ctx.task_id,
+                self.topic,
+                type(e).__name__,
+                ctx.execution_time,
+                e,
             )
             self.failure.fire(ctx)
             if self.publish_result and self.queue:
@@ -313,7 +321,9 @@ class TaskRunner(Observable):
             ctx.end_time = time.time()
             logger.info(
                 "task.success id=%s topic=%s elapsed=%.4fs",
-                ctx.task_id, self.topic, ctx.execution_time,
+                ctx.task_id,
+                self.topic,
+                ctx.execution_time,
             )
             self.success.fire(ctx)
             if self.publish_result and self.queue:
@@ -452,12 +462,12 @@ def task(
 
         # Expose runner's Observable surface on the wrapper so callers can
         # do ``my_task.success.on(handler)`` or ``my_task.on("failure", fn)``.
-        wrapper.start    = runner.start
-        wrapper.success  = runner.success
-        wrapper.failure  = runner.failure
+        wrapper.start = runner.start
+        wrapper.success = runner.success
+        wrapper.failure = runner.failure
         wrapper.complete = runner.complete
-        wrapper.on       = runner.on
-        wrapper.fire     = runner.fire
+        wrapper.on = runner.on
+        wrapper.fire = runner.fire
         wrapper.subscribe = runner.subscribe
 
         return wrapper

@@ -27,7 +27,6 @@ from callpyback.observers import (
     observe,
 )
 from callpyback.queue import MessageQueue
-from callpyback.work_queue import QueueFullError, WorkQueue
 from callpyback.remote import RemoteQueue, RemoteSubscription
 from callpyback.rpc import RoundRobinRPCClient, RPCClient, RPCServer, with_retry
 from callpyback.task import TaskPool, TaskRunner, task
@@ -47,6 +46,7 @@ from callpyback.types import (
     TaskResult,
     TaskStatus,
 )
+from callpyback.work_queue import QueueFullError, WorkQueue
 
 __version__ = "4.0.0"
 __author__ = "Adnan Harun Dogan"

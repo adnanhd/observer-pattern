@@ -131,7 +131,9 @@ class TCPServerTransport(Transport):
                 logger.info("Client connected: %s", addr)
                 with self._lock:
                     self._clients.append(client)
-                threading.Thread(target=self._client_loop, args=(client,), daemon=True).start()
+                threading.Thread(
+                    target=self._client_loop, args=(client,), daemon=True
+                ).start()
             except socket.timeout:
                 continue
             except OSError:
@@ -187,7 +189,9 @@ class TCPServerTransport(Transport):
         except Empty:
             return None
 
-    async def receive_async(self, topic: str, timeout: Optional[float] = None) -> Optional[Message]:
+    async def receive_async(
+        self, topic: str, timeout: Optional[float] = None
+    ) -> Optional[Message]:
         loop = asyncio.get_event_loop()
         try:
             return await asyncio.wait_for(
@@ -297,7 +301,9 @@ class TCPClientTransport(Transport):
         except Empty:
             return None
 
-    async def receive_async(self, topic: str, timeout: Optional[float] = None) -> Optional[Message]:
+    async def receive_async(
+        self, topic: str, timeout: Optional[float] = None
+    ) -> Optional[Message]:
         loop = asyncio.get_event_loop()
         try:
             return await asyncio.wait_for(

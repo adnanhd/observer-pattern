@@ -90,7 +90,9 @@ class Executor:
             self._pool = ProcessPoolExecutor(max_workers=self._max_workers)
 
         self._running = True
-        logger.info("executor.start mode=%s max_workers=%d", self._mode.value, self._max_workers)
+        logger.info(
+            "executor.start mode=%s max_workers=%d", self._mode.value, self._max_workers
+        )
 
     def stop(self, wait: bool = True) -> None:
         """Stop executor pool."""
@@ -130,7 +132,9 @@ class Executor:
             else:
                 # Process mode: ProcessPoolExecutor pickles func/args/kwargs
                 # internally to ship them to the worker.
-                future = self._pool.submit(_run_with_timing, task_id, func, args, kwargs)
+                future = self._pool.submit(
+                    _run_with_timing, task_id, func, args, kwargs
+                )
 
             with self._lock:
                 self._futures[task_id] = future

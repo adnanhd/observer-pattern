@@ -8,8 +8,13 @@ from typing import Any, List
 
 import pytest
 
-from callpyback import MessageQueue, RoundRobinRPCClient, RPCClient, RPCServer, with_retry
-
+from callpyback import (
+    MessageQueue,
+    RoundRobinRPCClient,
+    RPCClient,
+    RPCServer,
+    with_retry,
+)
 
 # =============================================================================
 # RoundRobinRPCClient

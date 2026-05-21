@@ -95,9 +95,11 @@ class RPCServer:
             if msg.reply_to:
                 response = RPCResponse(
                     id=str(uuid4()),
-                    request_id=msg.payload.get("id", "unknown")
-                    if isinstance(msg.payload, dict)
-                    else "unknown",
+                    request_id=(
+                        msg.payload.get("id", "unknown")
+                        if isinstance(msg.payload, dict)
+                        else "unknown"
+                    ),
                     error=f"Invalid request: {e}",
                     error_type="ValidationError",
                 )
@@ -260,7 +262,9 @@ class RoundRobinRPCClient:
             self._idx = (self._idx + 1) % len(self._clients)
         return client
 
-    def call(self, method: str, *args, timeout: Optional[float] = None, **kwargs) -> Any:
+    def call(
+        self, method: str, *args, timeout: Optional[float] = None, **kwargs
+    ) -> Any:
         return self._next_client().call(method, *args, timeout=timeout, **kwargs)
 
     def __getattr__(self, name: str) -> Callable:

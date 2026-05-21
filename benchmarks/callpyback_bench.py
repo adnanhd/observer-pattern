@@ -24,8 +24,8 @@ import time
 from typing import Any, List
 
 from callpyback import (
-    Executor,
     ExecutionMode,
+    Executor,
     MessageQueue,
     Observer,
     RPCClient,
@@ -34,7 +34,6 @@ from callpyback import (
     task,
 )
 from callpyback.transports.tcp import TCPClientTransport, TCPServerTransport
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -84,7 +83,9 @@ def bench_task_overhead() -> None:
     }
     for label, fn in cases.items():
         stats = timeit_ms(fn)
-        print(f"{label}  median={stats['median_ms']:7.4f} ms  p95={stats['p95_ms']:7.4f} ms")
+        print(
+            f"{label}  median={stats['median_ms']:7.4f} ms  p95={stats['p95_ms']:7.4f} ms"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +108,9 @@ def bench_rpc_roundtrip() -> None:
     try:
         inmem_client = RPCClient(inmem_queue, service_name="bench", timeout=5.0)
         stats = timeit_ms(lambda: inmem_client.call("echo", 42), runs=200, warmup=20)
-        print(f"in-memory queue            median={stats['median_ms']:7.4f} ms  p95={stats['p95_ms']:7.4f} ms")
+        print(
+            f"in-memory queue            median={stats['median_ms']:7.4f} ms  p95={stats['p95_ms']:7.4f} ms"
+        )
     finally:
         inmem_server.stop()
 
@@ -128,7 +131,9 @@ def bench_rpc_roundtrip() -> None:
 
     try:
         stats = timeit_ms(lambda: tcp_client.call("echo", 42), runs=200, warmup=20)
-        print(f"localhost TCP             median={stats['median_ms']:7.4f} ms  p95={stats['p95_ms']:7.4f} ms")
+        print(
+            f"localhost TCP             median={stats['median_ms']:7.4f} ms  p95={stats['p95_ms']:7.4f} ms"
+        )
     finally:
         tcp_server.stop()
         client_transport.close()

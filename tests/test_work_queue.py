@@ -7,7 +7,6 @@ import pytest
 
 from callpyback.work_queue import InFlightEntry, QueueFullError, WorkQueue
 
-
 # ---------------------------------------------------------------------------
 # Enqueue
 # ---------------------------------------------------------------------------
@@ -372,7 +371,9 @@ class TestWorkQueueVisibilityTimeout:
         time.sleep(0.4)  # expires, retry_count becomes 1
         msg = wq.dequeue("tasks", timeout=1.0)
         assert msg is not None
-        time.sleep(0.4)  # expires again, retry_count becomes 2 == max_retries -> dead letter
+        time.sleep(
+            0.4
+        )  # expires again, retry_count becomes 2 == max_retries -> dead letter
         # Should be in dead letter now
         dl = wq.dequeue("tasks.dead_letter", timeout=1.0)
         assert dl is not None
@@ -478,14 +479,14 @@ class TestWorkQueueThreadSafety:
 
         def ack_half():
             try:
-                for did in delivery_ids[:n // 2]:
+                for did in delivery_ids[: n // 2]:
                     wq.ack(did)
             except Exception as e:
                 errors.append(e)
 
         def nack_half():
             try:
-                for did in delivery_ids[n // 2:]:
+                for did in delivery_ids[n // 2 :]:
                     wq.nack(did, requeue=True)
             except Exception as e:
                 errors.append(e)

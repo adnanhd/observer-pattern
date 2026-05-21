@@ -261,7 +261,9 @@ class Eventful:
                     except Exception:
                         logger.exception(
                             "class subscriber for %s.%s failed: %r",
-                            klass.__name__, self._name, fn,
+                            klass.__name__,
+                            self._name,
+                            fn,
                         )
 
     @property
@@ -320,8 +322,10 @@ class Observable:
     def events(self) -> List[str]:
         """List of Eventful attribute names on this instance."""
         return [
-            name for name in dir(self)
-            if not name.startswith("_") and isinstance(getattr(self, name, None), Eventful)
+            name
+            for name in dir(self)
+            if not name.startswith("_")
+            and isinstance(getattr(self, name, None), Eventful)
         ]
 
 
@@ -348,7 +352,9 @@ class Node:
     gpus: List[int]
     handler: Callable
     _in_flight: int = field(default=0, init=False, repr=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False
+    )
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         with self._lock:
@@ -410,9 +416,15 @@ class Meter(Observable):
         # is called, the Eventful walks ``type(self).__mro__`` looking for
         # class-level subscribers registered via :func:`observe`. No
         # monkey-patching required.
-        self.measurement = Eventful(dispatcher=dispatcher, owner=self, name="measurement")
-        self.update_event = Eventful(dispatcher=dispatcher, owner=self, name="update_event")
-        self.reset_event = Eventful(dispatcher=dispatcher, owner=self, name="reset_event")
+        self.measurement = Eventful(
+            dispatcher=dispatcher, owner=self, name="measurement"
+        )
+        self.update_event = Eventful(
+            dispatcher=dispatcher, owner=self, name="update_event"
+        )
+        self.reset_event = Eventful(
+            dispatcher=dispatcher, owner=self, name="reset_event"
+        )
         # Aggregator state
         self.reset()
 
@@ -515,7 +527,7 @@ class Reporter(Observable):
             if not targets:
                 continue
             bound = getattr(self, attr)
-            for (target_cls, event) in targets:
+            for target_cls, event in targets:
                 _register_class_subscriber(target_cls, event, bound)
 
 

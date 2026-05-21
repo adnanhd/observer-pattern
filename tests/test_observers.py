@@ -24,7 +24,6 @@ from callpyback import (
     observe,
 )
 
-
 # =============================================================================
 # Eventful primitive
 # =============================================================================
@@ -126,7 +125,8 @@ class TestDispatchers:
         seen = []
         BroadcastDispatcher().dispatch(
             [lambda x: seen.append(("a", x)), lambda x: seen.append(("b", x))],
-            (5,), {},
+            (5,),
+            {},
         )
         assert seen == [("a", 5), ("b", 5)]
 
@@ -286,7 +286,9 @@ class TestReporter:
 
         t = TimingMeter()
         ctx = ExecutionContext(
-            func_name="t", args=(), kwargs={},
+            func_name="t",
+            args=(),
+            kwargs={},
             start_time=time.perf_counter() - 0.001,
         )
         t.on_start(ctx)
@@ -312,7 +314,10 @@ class TestConcreteMeters:
     def test_metrics_meter_extracts(self):
         m = MetricsMeter("loss", extract=lambda ctx: ctx.result["loss"])
         ctx = ExecutionContext(
-            func_name="t", args=(), kwargs={}, result={"loss": 0.42},
+            func_name="t",
+            args=(),
+            kwargs={},
+            result={"loss": 0.42},
         )
         m.on_success(ctx)
         assert m.stats["val"] == 0.42

@@ -198,7 +198,5 @@ class LogfireMetricLogger:
 
     def log(self, **kwargs: Any) -> None:
         """Log metrics as a Logfire info message."""
-        msg = f"{self._prefix}: " + " ".join(
-            f"{k}={v}" for k, v in kwargs.items()
-        )
+        msg = f"{self._prefix}: " + " ".join(f"{k}={v}" for k, v in kwargs.items())
         self._logfire.info(msg, **kwargs)

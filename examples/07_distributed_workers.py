@@ -34,7 +34,6 @@ from registry import TypeRegistry, build, serialize
 from callpyback import MessageQueue, RPCClient
 from callpyback.transports.tcp import TCPClientTransport
 
-
 # =============================================================================
 # Domain
 # =============================================================================
@@ -46,7 +45,9 @@ class ModelRegistry(TypeRegistry[Any], repo="examples.distributed.models"):
 
 @ModelRegistry.register_artifact
 class MLP:
-    def __init__(self, in_features: int = 4, hidden: int = 8, out_features: int = 2) -> None:
+    def __init__(
+        self, in_features: int = 4, hidden: int = 8, out_features: int = 2
+    ) -> None:
         self.in_features = in_features
         self.hidden = hidden
         self.out_features = out_features
@@ -60,8 +61,7 @@ class MLP:
 # =============================================================================
 
 
-WORKER_SOURCE = textwrap.dedent(
-    """
+WORKER_SOURCE = textwrap.dedent("""
     import sys, time
     from typing import Any
     from registry import TypeRegistry, build
@@ -101,8 +101,7 @@ WORKER_SOURCE = textwrap.dedent(
         pass
     finally:
         transport.close()
-    """
-)
+    """)
 
 
 def spawn_worker(port: int) -> subprocess.Popen:
@@ -138,8 +137,9 @@ def main(n_workers: int = 3, base_port: int = 19090) -> None:
 
         # Build a serializable envelope locally via registry-pattern.
         local_model = MLP(in_features=4, hidden=32, out_features=2)
-        envelope = serialize(local_model, serializator="python",
-                             repo="examples.distributed.models")
+        envelope = serialize(
+            local_model, serializator="python", repo="examples.distributed.models"
+        )
 
         # Dispatch 9 calls round-robin across 3 workers.
         pid_counts: dict[int, int] = {}

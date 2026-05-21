@@ -71,9 +71,7 @@ class WorkQueue(MessageQueue):
         self._wq_lock = threading.RLock()
         self._pending: Dict[str, deque] = defaultdict(deque)
         self._in_flight: Dict[str, InFlightEntry] = {}
-        self._consumer_groups: Dict[Tuple[str, str], List[Callable]] = defaultdict(
-            list
-        )
+        self._consumer_groups: Dict[Tuple[str, str], List[Callable]] = defaultdict(list)
         self._rr_index: Dict[Tuple[str, str], int] = defaultdict(int)
         self._consumer_registry: Dict[str, Tuple[str, str]] = {}
         self._pending_condition = threading.Condition(self._wq_lock)
@@ -296,9 +294,7 @@ class WorkQueue(MessageQueue):
         with self._wq_lock:
             if topic is None:
                 return len(self._in_flight)
-            return sum(
-                1 for entry in self._in_flight.values() if entry.topic == topic
-            )
+            return sum(1 for entry in self._in_flight.values() if entry.topic == topic)
 
     def close(self) -> None:
         """Stop reaper thread and close transport."""
@@ -317,14 +313,10 @@ class WorkQueue(MessageQueue):
 
     # --- Internal helpers ---
 
-    def _make_in_flight(
-        self, msg: Message, topic: str, consumer_group: str
-    ) -> Message:
+    def _make_in_flight(self, msg: Message, topic: str, consumer_group: str) -> Message:
         """Stamp a message with a delivery_id, record it in-flight, and return it."""
         delivery_id = str(uuid4())
-        vt = msg.headers.get(
-            "_wq_visibility_timeout", self._default_visibility_timeout
-        )
+        vt = msg.headers.get("_wq_visibility_timeout", self._default_visibility_timeout)
         retry_count = msg.headers.get("_wq_retry_count", 0)
 
         new_headers = {**msg.headers, "_wq_delivery_id": delivery_id}
@@ -348,9 +340,7 @@ class WorkQueue(MessageQueue):
         to_invoke: List[Tuple[Callable, Message, str]] = []
 
         with self._wq_lock:
-            groups = [
-                key for key in self._consumer_groups if key[0] == topic
-            ]
+            groups = [key for key in self._consumer_groups if key[0] == topic]
             if not groups:
                 return
 
@@ -408,9 +398,7 @@ class WorkQueue(MessageQueue):
             **message.headers,
             "_wq_dead_lettered_at": datetime.now(timezone.utc).isoformat(),
             "_wq_dead_letter_reason": reason,
-            "_wq_original_topic": message.headers.get(
-                "_wq_original_topic", topic
-            ),
+            "_wq_original_topic": message.headers.get("_wq_original_topic", topic),
         }
         dl_msg = message.model_copy(
             update={
@@ -427,9 +415,7 @@ class WorkQueue(MessageQueue):
         if self._reaper_running:
             return
         self._reaper_running = True
-        self._reaper_thread = threading.Thread(
-            target=self._reaper_loop, daemon=True
-        )
+        self._reaper_thread = threading.Thread(target=self._reaper_loop, daemon=True)
         self._reaper_thread.start()
 
     def _reaper_loop(self) -> None:

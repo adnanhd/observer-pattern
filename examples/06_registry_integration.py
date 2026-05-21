@@ -30,7 +30,6 @@ from registry import TypeRegistry, build, serialize
 
 from callpyback import MessageQueue, RPCClient, RPCServer
 
-
 # =============================================================================
 # Domain: a tiny model registered with registry-pattern
 # =============================================================================
@@ -44,7 +43,9 @@ class ModelRegistry(TypeRegistry[Any], repo="examples.models"):
 class MLP:
     """Plain-Python stand-in for a real torch model."""
 
-    def __init__(self, in_features: int = 4, hidden: int = 8, out_features: int = 2) -> None:
+    def __init__(
+        self, in_features: int = 4, hidden: int = 8, out_features: int = 2
+    ) -> None:
         self.in_features = in_features
         self.hidden = hidden
         self.out_features = out_features
