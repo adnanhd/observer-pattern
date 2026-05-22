@@ -21,6 +21,11 @@ class MemoryTransport(Transport):
         )
         self._subscribers: Dict[str, Callable[[Message], None]] = {}
         self._topic_subs: Dict[str, List[str]] = defaultdict(list)
+        # Reverse index: sub_id -> topic pattern. Built at subscribe time so
+        # send() can route in O(N_subscribers) rather than scanning every
+        # (sub, topic) pair (the previous O(N_subs * N_topics) walk was the
+        # dominant cost in MessageQueue.publish per the profiler).
+        self._sub_topic: Dict[str, str] = {}
         self._lock = threading.RLock()
         self._closed = False
 
@@ -37,15 +42,12 @@ class MemoryTransport(Transport):
             except Exception:
                 pass  # Queue full, drop oldest would be better
 
-            # Notify matching subscribers
+            # Notify matching subscribers. ``self._sub_topic[sub_id]`` gives
+            # the subscription's pattern in O(1); we only run the
+            # (potentially expensive) ``_matches`` check after that lookup.
             for sub_id, callback in list(self._subscribers.items()):
-                sub_topic = None
-                for t, subs in self._topic_subs.items():
-                    if sub_id in subs:
-                        sub_topic = t
-                        break
-
-                if sub_topic and self._matches(topic, sub_topic):
+                sub_topic = self._sub_topic.get(sub_id)
+                if sub_topic is not None and self._matches(topic, sub_topic):
                     try:
                         callback(message)
                     except Exception:
@@ -82,10 +84,11 @@ class MemoryTransport(Transport):
         if self._closed:
             raise RuntimeError("Transport is closed")
 
-        sub_id = str(uuid4())
+        sub_id = uuid4().hex
         with self._lock:
             self._subscribers[sub_id] = callback
             self._topic_subs[topic].append(sub_id)
+            self._sub_topic[sub_id] = topic
         return sub_id
 
     def unsubscribe(self, subscription_id: str) -> bool:
@@ -95,10 +98,11 @@ class MemoryTransport(Transport):
                 return False
 
             del self._subscribers[subscription_id]
-            for topic, subs in self._topic_subs.items():
-                if subscription_id in subs:
+            topic = self._sub_topic.pop(subscription_id, None)
+            if topic is not None:
+                subs = self._topic_subs.get(topic)
+                if subs and subscription_id in subs:
                     subs.remove(subscription_id)
-                    break
             return True
 
     def close(self) -> None:
@@ -107,6 +111,7 @@ class MemoryTransport(Transport):
         with self._lock:
             self._subscribers.clear()
             self._topic_subs.clear()
+            self._sub_topic.clear()
 
     def _matches(self, topic: str, pattern: str) -> bool:
         """Check if topic matches pattern (supports * and **)."""
