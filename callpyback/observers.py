@@ -45,6 +45,7 @@ Lifecycle event names (extensible; just call ``self.fire("name", ...)``):
 
 from __future__ import annotations
 
+import functools
 import logging
 import resource
 import threading
@@ -479,18 +480,37 @@ class Meter(Observable):
 
         Convention: method ``on_X`` -> subscribed to event ``"X"``. Returns
         ``self`` for chaining (``Meter().attach(task)``).
+
+        The ``on_X`` method scan is cached per Meter subclass via
+        ``_meter_event_names`` so attach() runs in O(channels) rather than
+        re-walking ``dir(type(self))`` on every call.
         """
-        for attr in dir(type(self)):
-            if not attr.startswith("on_"):
-                continue
-            method = getattr(self, attr, None)
-            if not callable(method):
-                continue
+        for attr in _meter_event_names(type(self)):
+            method = getattr(self, attr)
             event = attr[3:]
             channel = getattr(source, event, None)
             if isinstance(channel, Eventful):
                 channel.subscribe(method)
         return self
+
+
+@functools.lru_cache(maxsize=None)
+def _meter_event_names(meter_cls: type) -> tuple:
+    """Cached scan of ``on_X`` callables on a Meter subclass.
+
+    ``dir()`` + ``startswith`` cost ~43 string ops per attach for a typical
+    Meter; that scan is identical across all instances of the same class
+    and across repeated attaches of the same instance, so we memoize it.
+    Keyed on the class itself; cache survives for the class's lifetime.
+    """
+    names = []
+    for attr in dir(meter_cls):
+        if not attr.startswith("on_"):
+            continue
+        method = getattr(meter_cls, attr, None)
+        if callable(method):
+            names.append(attr)
+    return tuple(names)
 
 
 # =============================================================================
