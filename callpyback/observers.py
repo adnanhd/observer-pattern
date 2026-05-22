@@ -45,12 +45,12 @@ Lifecycle event names (extensible; just call ``self.fire("name", ...)``):
 
 from __future__ import annotations
 
-import functools
 import logging
 import resource
 import threading
 import time
 import tracemalloc
+import weakref
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Union
@@ -494,23 +494,43 @@ class Meter(Observable):
         return self
 
 
-@functools.lru_cache(maxsize=None)
+_METER_EVENT_NAMES: "weakref.WeakKeyDictionary[type, tuple]" = (
+    weakref.WeakKeyDictionary()
+)
+_METER_EVENT_NAMES_LOCK = threading.Lock()
+
+
 def _meter_event_names(meter_cls: type) -> tuple:
     """Cached scan of ``on_X`` callables on a Meter subclass.
 
     ``dir()`` + ``startswith`` cost ~43 string ops per attach for a typical
     Meter; that scan is identical across all instances of the same class
     and across repeated attaches of the same instance, so we memoize it.
-    Keyed on the class itself; cache survives for the class's lifetime.
+
+    Backed by a ``WeakKeyDictionary`` so dynamically defined Meter
+    subclasses (e.g. one declared inside a test or factory function) can
+    be garbage-collected normally -- the cache entry vanishes with them.
     """
-    names = []
-    for attr in dir(meter_cls):
-        if not attr.startswith("on_"):
-            continue
-        method = getattr(meter_cls, attr, None)
-        if callable(method):
-            names.append(attr)
-    return tuple(names)
+    cached = _METER_EVENT_NAMES.get(meter_cls)
+    if cached is not None:
+        return cached
+    with _METER_EVENT_NAMES_LOCK:
+        cached = _METER_EVENT_NAMES.get(meter_cls)
+        if cached is not None:
+            return cached
+        names = []
+        for attr in dir(meter_cls):
+            if not attr.startswith("on_"):
+                continue
+            method = getattr(meter_cls, attr, None)
+            if callable(method):
+                names.append(attr)
+        result = tuple(names)
+        try:
+            _METER_EVENT_NAMES[meter_cls] = result
+        except TypeError:
+            pass
+        return result
 
 
 # =============================================================================
@@ -541,11 +561,12 @@ class Reporter(Observable):
         # No lifecycle channels by default; subclasses may add their own.
         # The walker runs unconditionally so subclasses' decorated methods
         # auto-wire without needing to call any specific super().
-        for attr in dir(type(self)):
-            method = getattr(type(self), attr, None)
-            targets = getattr(method, "_observe_targets", None)
-            if not targets:
-                continue
+        #
+        # The (attr_name, targets) list is cached per Reporter subclass via
+        # ``_reporter_observe_methods`` so __init__ runs in O(n_observers)
+        # rather than re-walking ``dir(type(self))`` and probing every
+        # attribute for ``_observe_targets`` on each instantiation.
+        for attr, targets in _reporter_observe_methods(type(self)):
             bound = getattr(self, attr)
             for target_cls, event in targets:
                 _register_class_subscriber(target_cls, event, bound)
@@ -561,6 +582,46 @@ _CLASS_SUBSCRIBERS: Dict[type, Dict[str, List[Callable]]] = {}
 
 def _register_class_subscriber(target_cls: type, event: str, fn: Callable) -> None:
     _CLASS_SUBSCRIBERS.setdefault(target_cls, {}).setdefault(event, []).append(fn)
+
+
+_REPORTER_OBSERVE_METHODS: "weakref.WeakKeyDictionary[type, tuple]" = (
+    weakref.WeakKeyDictionary()
+)
+_REPORTER_OBSERVE_LOCK = threading.Lock()
+
+
+def _reporter_observe_methods(reporter_cls: type) -> tuple:
+    """Cached scan of ``@observe``-decorated methods on a Reporter subclass.
+
+    Returns a tuple of ``(attr_name, targets)`` pairs where ``targets`` is
+    the list of ``(target_cls, event)`` tuples placed on the method by
+    ``@observe``. Memoizing here turns ``Reporter.__init__`` from an
+    O(n_attrs_on_class) ``dir()`` + ``getattr`` walk into an
+    O(n_observers) iteration over the precomputed list.
+
+    Backed by a ``WeakKeyDictionary`` so dynamically defined Reporter
+    subclasses can be garbage-collected normally; the cache entry
+    disappears when the class dies.
+    """
+    cached = _REPORTER_OBSERVE_METHODS.get(reporter_cls)
+    if cached is not None:
+        return cached
+    with _REPORTER_OBSERVE_LOCK:
+        cached = _REPORTER_OBSERVE_METHODS.get(reporter_cls)
+        if cached is not None:
+            return cached
+        pairs = []
+        for attr in dir(reporter_cls):
+            method = getattr(reporter_cls, attr, None)
+            targets = getattr(method, "_observe_targets", None)
+            if targets:
+                pairs.append((attr, tuple(targets)))
+        result = tuple(pairs)
+        try:
+            _REPORTER_OBSERVE_METHODS[reporter_cls] = result
+        except TypeError:
+            pass
+        return result
 
 
 def observe(target_cls: type, event: str) -> Callable:
