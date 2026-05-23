@@ -1,22 +1,26 @@
 #!/usr/bin/env python
-"""Comprehensive profiling of observer-pattern hot paths.
+"""Comprehensive profiling of observer-pattern hot paths (v2).
 
-Covers seven angles:
+Eight sections; wall-clock sections go through ``bench.BenchSuite`` so they
+collect stats (best / median / p95 / stddev), can dump JSON, and can diff
+against a saved baseline. cProfile sections stay standalone.
 
   1. Eventful.fire subscriber sweep (0, 1, 3, 10, 100 subscribers)
   2. Dispatcher comparison (Broadcast, RoundRobin, Concurrent)
-  3. @task lifecycle breakdown -- UUID generation, _execute, fire overhead
+  3. @task lifecycle breakdown (bare vs decorated +/- observers)
   4. WorkQueue enqueue/dequeue
-  5. MessageQueue in-memory roundtrip
-  6. Meter attach cost (dir-walk over source channels)
-  7. tracemalloc allocators during sustained task dispatch
+  5. MessageQueue in-memory publish
+  6. Meter.attach() cost
+  7. Concurrent Eventful.fire (lock contention under N threads)
+  8. tracemalloc allocators during sustained task dispatch
 
-Skips TCP and process-mode Executor -- cProfile is not useful for socket I/O
-or fork overhead.
+Skips TCP and process-mode Executor -- cProfile is not useful there.
 
 Run::
 
     PYTHONPATH=. python benchmarks/profile_components.py
+    PYTHONPATH=. python benchmarks/profile_components.py --output baseline.json
+    PYTHONPATH=. python benchmarks/profile_components.py --baseline baseline.json --strict
 """
 
 from __future__ import annotations
@@ -25,9 +29,11 @@ import cProfile
 import gc
 import io
 import pstats
+import sys
+import threading
 import time
 import tracemalloc
-from typing import Any
+from pathlib import Path
 
 from callpyback import (
     BroadcastDispatcher,
@@ -42,20 +48,11 @@ from callpyback import (
     task,
 )
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bench import BenchSuite, banner, finalize, parse_args  # noqa: E402
 
 
-def banner(text: str) -> None:
-    print()
-    print("#" * 72)
-    print(f"# {text}")
-    print("#" * 72)
-
-
-def print_pstats(pr: cProfile.Profile, top: int = 12) -> None:
+def _print_pstats(pr: cProfile.Profile, top: int = 12) -> None:
     for sort_key, header in (
         ("cumulative", "by cumulative time"),
         ("tottime", "by internal time"),
@@ -67,26 +64,13 @@ def print_pstats(pr: cProfile.Profile, top: int = 12) -> None:
         print(s.getvalue())
 
 
-def time_us(fn, iterations: int, warmup: int = 50) -> tuple[float, float]:
-    """Returns (best_us_per_call, mean_us_per_call)."""
-    for _ in range(warmup):
-        fn()
-    samples = []
-    for _ in range(iterations):
-        gc.collect()
-        t0 = time.perf_counter()
-        fn()
-        samples.append((time.perf_counter() - t0) * 1_000_000.0)
-    return min(samples), sum(samples) / len(samples)
-
-
 # ---------------------------------------------------------------------------
-# Section 1: Eventful.fire subscriber sweep
+# Sections
 # ---------------------------------------------------------------------------
 
 
-def section_subscriber_sweep() -> None:
-    banner("SECTION 1 -- Eventful.fire vs subscriber count (microseconds per fire)")
+def section_subscriber_sweep(suite: BenchSuite) -> None:
+    banner("SECTION 1 -- Eventful.fire vs subscriber count")
 
     def make_sub(i: int):
         def sub(x: int) -> None:
@@ -94,23 +78,21 @@ def section_subscriber_sweep() -> None:
 
         return sub
 
-    print(f"{'subs':>6} {'best_us':>10} {'mean_us':>10}")
-    print("-" * 30)
     for n_subs in (0, 1, 3, 10, 100):
         ev: Eventful[int] = Eventful()
         for i in range(n_subs):
             ev.subscribe(make_sub(i))
-        best, mean = time_us(lambda e=ev: e.fire(42), iterations=2000, warmup=200)
-        print(f"{n_subs:>6} {best:>10.3f} {mean:>10.3f}")
+        suite.measure(
+            f"Eventful.fire n_subs={n_subs:<3}",
+            lambda e=ev: e.fire(42),
+            iterations=2000,
+            warmup=200,
+        )
 
 
-# ---------------------------------------------------------------------------
-# Section 2: Dispatcher comparison
-# ---------------------------------------------------------------------------
-
-
-def section_dispatcher_comparison() -> None:
-    banner("SECTION 2 -- Dispatcher kinds with 10 subscribers, 2000 dispatches each")
+def section_dispatcher_comparison(suite: BenchSuite) -> None:
+    banner("SECTION 2 -- Dispatcher kinds with 10 subscribers")
+    from concurrent.futures import ThreadPoolExecutor
 
     def make_sub(i: int):
         def sub(x: int) -> None:
@@ -118,64 +100,52 @@ def section_dispatcher_comparison() -> None:
 
         return sub
 
-    from concurrent.futures import ThreadPoolExecutor
-
     thread_exec = ThreadPoolExecutor(max_workers=2)
-    # LeastLoaded skipped: it requires Node subscribers with a .load() method,
-    # incompatible with the plain-callable subscribers used elsewhere in this script.
-    dispatchers: list[tuple[str, Dispatcher]] = [
+    dispatchers: list = [
         ("Broadcast", BroadcastDispatcher()),
         ("RoundRobin", RoundRobinDispatcher()),
         ("Concurrent", ConcurrentDispatcher(executor=thread_exec)),
     ]
-
-    print(f"{'dispatcher':<14} {'best_us':>10} {'mean_us':>10}")
-    print("-" * 38)
-    for label, disp in dispatchers:
-        ev: Eventful[int] = Eventful(dispatcher=disp)
-        for i in range(10):
-            ev.subscribe(make_sub(i))
-        best, mean = time_us(lambda e=ev: e.fire(42), iterations=2000, warmup=200)
-        print(f"{label:<14} {best:>10.3f} {mean:>10.3f}")
-    thread_exec.shutdown(wait=False)
-
-
-# ---------------------------------------------------------------------------
-# Section 3: @task lifecycle breakdown
-# ---------------------------------------------------------------------------
+    try:
+        for label, disp in dispatchers:
+            ev: Eventful[int] = Eventful(dispatcher=disp)
+            for i in range(10):
+                ev.subscribe(make_sub(i))
+            suite.measure(
+                f"Dispatcher.{label:<11}",
+                lambda e=ev: e.fire(42),
+                iterations=2000,
+                warmup=200,
+            )
+    finally:
+        thread_exec.shutdown(wait=False)
 
 
-def section_task_lifecycle() -> None:
-    banner("SECTION 3 -- @task() lifecycle breakdown (microseconds per call)")
+def section_task_lifecycle(suite: BenchSuite) -> None:
+    banner("SECTION 3 -- @task() lifecycle breakdown")
 
     def bare(x: int) -> int:
         return x * 2
 
-    # Reference -- bare call
-    best_bare, mean_bare = time_us(lambda: bare(7), iterations=5000, warmup=500)
+    suite.measure("bare function call", lambda: bare(7), iterations=5000, warmup=500)
 
-    # No observer
     decorated = task()(bare)
-    best_no, mean_no = time_us(lambda: decorated(7), iterations=5000, warmup=500)
+    suite.measure(
+        "@task() no observer", lambda: decorated(7), iterations=5000, warmup=500
+    )
 
-    # One TimingMeter
     decorated_t = task(on_execute=[TimingMeter()])(bare)
-    best_t, mean_t = time_us(lambda: decorated_t(7), iterations=5000, warmup=500)
+    suite.measure(
+        "@task() + TimingMeter", lambda: decorated_t(7), iterations=5000, warmup=500
+    )
 
-    # One MetricsMeter -- extractor returns a constant
     decorated_m = task(
         on_execute=[MetricsMeter(name="bench", extract=lambda ctx: 1.0)]
     )(bare)
-    best_m, mean_m = time_us(lambda: decorated_m(7), iterations=5000, warmup=500)
+    suite.measure(
+        "@task() + MetricsMeter", lambda: decorated_m(7), iterations=5000, warmup=500
+    )
 
-    print(f"{'variant':<30} {'best_us':>10} {'mean_us':>10}")
-    print("-" * 54)
-    print(f"{'bare function call':<30} {best_bare:>10.3f} {mean_bare:>10.3f}")
-    print(f"{'@task() no observer':<30} {best_no:>10.3f} {mean_no:>10.3f}")
-    print(f"{'@task() + TimingMeter':<30} {best_t:>10.3f} {mean_t:>10.3f}")
-    print(f"{'@task() + MetricsMeter':<30} {best_m:>10.3f} {mean_m:>10.3f}")
-
-    # cProfile of the no-observer hot path to attribute the overhead
     print()
     print("-- cProfile of @task() no observer, 10k calls --")
     pr = cProfile.Profile()
@@ -183,15 +153,10 @@ def section_task_lifecycle() -> None:
     for i in range(10_000):
         decorated(i)
     pr.disable()
-    print_pstats(pr, top=12)
+    _print_pstats(pr, top=12)
 
 
-# ---------------------------------------------------------------------------
-# Section 4: WorkQueue throughput
-# ---------------------------------------------------------------------------
-
-
-def section_workqueue() -> None:
+def section_workqueue(suite: BenchSuite) -> None:
     banner("SECTION 4 -- WorkQueue enqueue + dequeue (50 batches of 100)")
     from callpyback import WorkQueue
 
@@ -204,51 +169,37 @@ def section_workqueue() -> None:
         for _ in range(100):
             q.dequeue(TOPIC, timeout=0)
 
-    best, mean = time_us(enq_then_deq, iterations=50, warmup=5)
-    print(f"100 enqueue + 100 dequeue  best={best:>10.3f} us  mean={mean:>10.3f} us")
-    print(f"per op (best / 200): {best / 200:.3f} us")
+    suite.measure(
+        "WorkQueue 100 enq + 100 deq", enq_then_deq, iterations=50, warmup=5, unit="us"
+    )
 
 
-# ---------------------------------------------------------------------------
-# Section 5: MessageQueue in-memory roundtrip
-# ---------------------------------------------------------------------------
-
-
-def section_messagequeue() -> None:
-    banner("SECTION 5 -- MessageQueue publish + receive, 5k roundtrips")
-
+def section_messagequeue(suite: BenchSuite) -> None:
+    banner("SECTION 5 -- MessageQueue publish, 5k roundtrips")
     q = MessageQueue()
-    received: list[Any] = []
+    received: list = []
 
-    def handler(msg: Any) -> None:
+    def handler(msg):
         received.append(msg)
 
     q.subscribe("topic.bench", handler)
-
-    def pub() -> None:
-        q.publish("topic.bench", {"x": 1})
-
-    best, mean = time_us(pub, iterations=5000, warmup=500)
-    print(f"publish() best={best:>10.3f} us  mean={mean:>10.3f} us")
-    print(f"received {len(received)} messages (sanity check)")
-
-
-# ---------------------------------------------------------------------------
-# Section 6: Meter attach + Reporter lifecycle
-# ---------------------------------------------------------------------------
+    suite.measure(
+        "MessageQueue.publish",
+        lambda: q.publish("topic.bench", {"x": 1}),
+        iterations=5000,
+        warmup=500,
+    )
 
 
-def section_meter_reporter() -> None:
+def section_meter_attach(suite: BenchSuite) -> None:
     banner("SECTION 6 -- Meter.attach() cost on a deep source class")
 
     class DeepSource:
         pass
 
-    # Add many on_X channels to inflate the dir() walk in attach.
     for i in range(50):
         ev: Eventful[int] = Eventful()
         setattr(DeepSource, f"channel_{i}", ev)
-
     source = DeepSource()
 
     class MyMeter(Meter):
@@ -259,14 +210,16 @@ def section_meter_reporter() -> None:
             pass
 
     def create_and_attach() -> None:
-        # Meter has no public detach(); each call creates+attaches a new meter.
         m = MyMeter()
         m.attach(source)
 
-    best, mean = time_us(create_and_attach, iterations=500, warmup=50)
-    print(f"create + attach    best={best:>10.3f} us  mean={mean:>10.3f} us")
+    suite.measure(
+        "Meter create + attach",
+        create_and_attach,
+        iterations=500,
+        warmup=50,
+    )
 
-    # cProfile of attach() in isolation
     print()
     print("-- cProfile of 1000 Meter.attach(source) calls --")
     meters = [MyMeter() for _ in range(1000)]
@@ -275,54 +228,114 @@ def section_meter_reporter() -> None:
     for m in meters:
         m.attach(source)
     pr.disable()
-    print_pstats(pr, top=12)
+    _print_pstats(pr, top=12)
 
 
-# ---------------------------------------------------------------------------
-# Section 7: tracemalloc -- sustained task dispatch
-# ---------------------------------------------------------------------------
+def section_concurrent_fire(suite: BenchSuite) -> None:
+    """Multi-thread Eventful.fire to surface lock contention.
+
+    Each worker fires N times into the SAME shared Eventful with 5
+    subscribers. The shared subscriber-list lock inside Eventful.fire is
+    what we want to stress. Reported value is the total wall time over
+    all threads divided by total fires -- so a result of X us means
+    "X us per fire averaged across all threads".
+    """
+    banner("SECTION 7 -- Eventful.fire under concurrent threads")
+
+    def make_sub(i: int):
+        def sub(x: int) -> None:
+            _ = x + i
+
+        return sub
+
+    fires_per_thread = 5_000
+    for n_threads in (1, 2, 4, 8):
+        ev: Eventful[int] = Eventful()
+        for i in range(5):
+            ev.subscribe(make_sub(i))
+
+        def worker() -> None:
+            for j in range(fires_per_thread):
+                ev.fire(j)
+
+        def run_concurrent() -> None:
+            threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        # Treat one full concurrent run as one "iteration"; we get
+        # n_threads * fires_per_thread fires per iter. Time each run, then
+        # report normalized per-fire microseconds.
+        suite.measure(
+            f"concurrent fire threads={n_threads:<2}",
+            run_concurrent,
+            iterations=5,
+            warmup=1,
+            unit="ms",
+        )
+        # Convert the just-collected ms sample to a per-fire us readout.
+        s = suite.samples[-1]
+        total_fires = n_threads * fires_per_thread
+        per_fire_us = (s.best * 1000.0) / total_fires
+        print(
+            f"   -> {per_fire_us:.3f} us per fire "
+            f"(best of 5; {total_fires:,} fires per run)"
+        )
 
 
 def section_tracemalloc() -> None:
-    banner("SECTION 7 -- tracemalloc top allocators during 5000 @task() calls")
+    banner("SECTION 8 -- tracemalloc top allocators during 5000 @task() calls")
 
     def bare(x: int) -> int:
         return x * 2
 
     decorated = task()(bare)
-
-    # Warm up
     for i in range(200):
         decorated(i)
     gc.collect()
-
     tracemalloc.start(25)
     snap_before = tracemalloc.take_snapshot()
     for i in range(5000):
         decorated(i)
     snap_after = tracemalloc.take_snapshot()
     tracemalloc.stop()
-
     diff = snap_after.compare_to(snap_before, "lineno")
     print(f"{'rank':>4}  {'size_kb':>10}  {'count':>8}  location")
-    print("-" * 72)
+    print("-" * 78)
     for i, stat in enumerate(diff[:15], 1):
-        loc = str(stat.traceback)
-        print(f"{i:>4}  {stat.size_diff / 1024:>10.1f}  {stat.count_diff:>8}  {loc}")
+        print(
+            f"{i:>4}  {stat.size_diff / 1024:>10.1f}  {stat.count_diff:>8}  "
+            f"{stat.traceback}"
+        )
 
 
 # ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    section_subscriber_sweep()
-    section_dispatcher_comparison()
-    section_task_lifecycle()
-    section_workqueue()
-    section_messagequeue()
-    section_meter_reporter()
+def main() -> int:
+    args = parse_args()
+    suite = BenchSuite(name="observer-pattern.profile_components", cli=args)
+
+    section_subscriber_sweep(suite)
+    section_dispatcher_comparison(suite)
+    section_task_lifecycle(suite)
+    section_workqueue(suite)
+    section_messagequeue(suite)
+    section_meter_attach(suite)
+    section_concurrent_fire(suite)
     section_tracemalloc()
+
+    banner("ASSERT_WITHIN GATES")
+    suite.assert_within("Eventful.fire n_subs=3  ", 10.0)  # us, floor ~2.4 us
+    suite.assert_within("@task() no observer", 30.0)  # us, floor ~16 us
+    suite.assert_within("Meter create + attach", 50.0)  # us, floor ~16 us (post-cache)
+
+    return finalize(suite)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
