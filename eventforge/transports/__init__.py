@@ -1,4 +1,4 @@
-"""Message transports for CallPyBack."""
+"""Message transports for eventforge."""
 
 from eventforge.transports.base import Transport
 from eventforge.transports.memory import MemoryTransport

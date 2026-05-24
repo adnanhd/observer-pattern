@@ -4,7 +4,7 @@ Pydantic models for messages, tasks, and RPC.
 
 ## Overview
 
-CallPyBack uses Pydantic v2 models for:
+eventforge uses Pydantic v2 models for:
 - Type validation
 - Serialization/deserialization
 - API documentation

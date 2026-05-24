@@ -4,7 +4,7 @@ Remote Procedure Call over message queue.
 
 ## Overview
 
-CallPyBack provides RPC functionality via:
+eventforge provides RPC functionality via:
 - `RPCServer` - Registers and handles method calls
 - `RPCClient` - Makes remote method calls
 

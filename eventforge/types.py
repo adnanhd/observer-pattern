@@ -1,4 +1,4 @@
-"""Core types for CallPyBack message queue and execution."""
+"""Core types for eventforge message queue and execution."""
 
 import threading
 from dataclasses import dataclass, field
