@@ -1,6 +1,6 @@
 # Task Decorator
 
-The `@task` decorator is the core abstraction in CallPyBack, providing a unified way to create callable tasks with full lifecycle support.
+The `@task` decorator is the core abstraction in eventforge, providing a unified way to create callable tasks with full lifecycle support.
 
 ## Overview
 

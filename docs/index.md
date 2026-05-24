@@ -1,10 +1,10 @@
-# CallPyBack Documentation
+# eventforge Documentation
 
 Message-driven task execution with pub-sub, executors, and RPC.
 
 ## Overview
 
-CallPyBack is a Python library for building message-driven applications with:
+eventforge is a Python library for building message-driven applications with:
 
 - **Task Decorator**: Unified task abstraction with lifecycle support
 - **Message Queue**: Pub-sub messaging with Pydantic validation
