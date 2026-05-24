@@ -5,10 +5,10 @@ The `@task` decorator is the core abstraction in CallPyBack, providing a unified
 ## Overview
 
 ```python
-from callpyback import task, MessageQueue, Executor, TimingObserver
+from eventforge import task, MessageQueue, Executor, TimingMeter
 
 queue = MessageQueue()
-timing = TimingObserver()
+timing = TimingMeter()
 
 @task(
     queue=queue,
@@ -59,10 +59,10 @@ queue.publish("my.task", 21)     # Queue trigger
 Attach observers for profiling and monitoring:
 
 ```python
-from callpyback import TimingObserver, MetricsObserver
+from eventforge import TimingMeter, MetricsMeter
 
-timing = TimingObserver(threshold=1.0)
-metrics = MetricsObserver()
+timing = TimingMeter(threshold=1.0)
+metrics = MetricsMeter()
 
 @task(on_execute=[timing, metrics])
 def my_task(x):
@@ -257,7 +257,7 @@ queue.publish("my.task", 42)  # my_task(42) - would fail here, needs 2 args
 Run tasks with different execution modes:
 
 ```python
-from callpyback import Executor, ExecutionMode
+from eventforge import Executor, ExecutionMode
 
 # Thread-based for I/O-bound tasks
 thread_executor = Executor(mode=ExecutionMode.THREAD, max_workers=4)
@@ -320,11 +320,11 @@ except ValueError:
 ### Profiling with Observers
 
 ```python
-from callpyback import TimingObserver, MetricsObserver, MemoryObserver
+from eventforge import TimingMeter, MetricsMeter, MemoryMeter
 
-timing = TimingObserver(threshold=0.5)
-metrics = MetricsObserver()
-memory = MemoryObserver()
+timing = TimingMeter(threshold=0.5)
+metrics = MetricsMeter()
+memory = MemoryMeter()
 
 @task(on_execute=[timing, metrics, memory])
 def analyzed_task(data):

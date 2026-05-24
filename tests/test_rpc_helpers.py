@@ -8,7 +8,7 @@ from typing import Any, List
 
 import pytest
 
-from callpyback import (
+from eventforge import (
     MessageQueue,
     RoundRobinRPCClient,
     RPCClient,

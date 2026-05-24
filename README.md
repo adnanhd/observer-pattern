@@ -2,12 +2,12 @@
 
 Message-driven task execution with pub-sub, executors, and RPC.
 
-`callpyback` is the **execution / dispatch** layer. Pair it with
+`eventforge` is the **execution / dispatch** layer. Pair it with
 [`registry-pattern`](https://github.com/adnanhd/registry-pattern) for the
 **validation / serialization** layer:
 
 - `registry-pattern` builds JSON-safe envelopes from your domain objects.
-- `callpyback` ships them across threads, processes, or the network and
+- `eventforge` ships them across threads, processes, or the network and
   runs the work on the other end.
 
 The library is useful as a standalone in-process task runner too -- the
@@ -16,7 +16,7 @@ single-process path bypasses all transport overhead.
 ## Installation
 
 ```bash
-pip install callpyback
+pip install eventforge
 ```
 
 Core install pulls only `pydantic` + `typing-extensions`. The TCP
@@ -39,11 +39,11 @@ have their own extras documented in `docs/`.
 The `@task` decorator is the core abstraction - callable-compatible with full lifecycle support:
 
 ```python
-from callpyback import task, MessageQueue, Executor, ExecutionMode, TimingObserver
+from eventforge import task, MessageQueue, Executor, ExecutionMode, TimingMeter
 
 queue = MessageQueue()
 executor = Executor(mode=ExecutionMode.THREAD)
-timing = TimingObserver()
+timing = TimingMeter()
 
 @task(
     queue=queue,
@@ -69,7 +69,7 @@ print(timing.stats)  # {'count': 2, 'avg': 0.001, ...}
 Key features:
 - **Callable-compatible**: Direct calls return results, not wrapped objects
 - **Unified execution**: Direct and queue-triggered use the same path
-- **Observer hooks**: Profile with `TimingObserver`, `MetricsObserver`, etc.
+- **Observer hooks**: Profile with `TimingMeter`, `MetricsMeter`, etc.
 - **Lifecycle handlers**: `on_success`, `on_failure`, `on_complete`
 - **Auto-publish**: Results published to `{topic}.success` / `{topic}.failure`
 
@@ -78,7 +78,7 @@ Key features:
 Run tasks in sequential, thread, or process mode:
 
 ```python
-from callpyback import Executor, ExecutionMode
+from eventforge import Executor, ExecutionMode
 
 def heavy_task(n):
     return sum(range(n))
@@ -101,7 +101,7 @@ with Executor(mode=ExecutionMode.PROCESS, max_workers=4) as executor:
 Pub-sub messaging with Pydantic validation:
 
 ```python
-from callpyback import MessageQueue
+from eventforge import MessageQueue
 
 queue = MessageQueue()
 
@@ -127,10 +127,10 @@ print(response.payload)  # 30
 Profile task execution with built-in observers:
 
 ```python
-from callpyback import task, TimingObserver, MetricsObserver, observe
+from eventforge import task, TimingMeter, MetricsMeter, observe
 
-timing = TimingObserver(threshold=1.0)  # Alert if > 1s
-metrics = MetricsObserver()
+timing = TimingMeter(threshold=1.0)  # Alert if > 1s
+metrics = MetricsMeter()
 
 @task(on_execute=[timing, metrics])
 def my_task(x):
@@ -149,19 +149,19 @@ def simple_function(x):
 ```
 
 Available observers:
-- `TimingObserver` - Execution timing with threshold alerts
-- `MetricsObserver` - Call counts, success/failure rates
-- `LoggingObserver` - Structured logging
-- `MemoryObserver` - Memory usage tracking
-- `CPUObserver` - CPU usage tracking
-- `MeterObserver` - Running averages (for training loops)
+- `TimingMeter` - Execution timing with threshold alerts
+- `MetricsMeter` - Call counts, success/failure rates
+- `LoggingReporter` - Structured logging
+- `MemoryMeter` - Memory usage tracking
+- `CPUMeter` - CPU usage tracking
+- `Meter` - Running averages (for training loops)
 
 ### RPC
 
 Remote procedure calls over message queue:
 
 ```python
-from callpyback import MessageQueue, Executor, RPCServer, RPCClient
+from eventforge import MessageQueue, Executor, RPCServer, RPCClient
 
 queue = MessageQueue()
 executor = Executor()
@@ -177,14 +177,14 @@ def add(a: int, b: int) -> int:
 def multiply(a: int, b: int) -> int:
     return a * b
 
-server.start()
+server.serve()
 
 # Client
 client = RPCClient(queue, service_name="calculator")
 print(client.call("add", 10, 20))       # 30
 print(client.multiply(5, 6))            # 30 (dynamic method access)
 
-server.stop()
+server.stop()  # serve() takes a stop_event for graceful shutdown
 ```
 
 ### Remote Queue
@@ -192,7 +192,7 @@ server.stop()
 Bridge message queues across nodes with remote subscriptions:
 
 ```python
-from callpyback import MessageQueue, RemoteQueue
+from eventforge import MessageQueue, RemoteQueue
 
 # Node 1
 queue1 = MessageQueue()
@@ -225,7 +225,7 @@ All components support async/await:
 
 ```python
 import asyncio
-from callpyback import MessageQueue, Executor, ExecutionMode
+from eventforge import MessageQueue, Executor, ExecutionMode
 
 async def main():
     # Async message queue
@@ -256,7 +256,7 @@ The intended deployment for ML / data pipelines:
 - **Remote** workers run `RPCServer` on a TCP port, accept envelopes,
   reconstruct objects with `registry.build(...)`, run the work, return
   JSON-friendly results.
-- callpyback owns the wire (JSON over TCP, no pickle); registry-pattern
+- eventforge owns the wire (JSON over TCP, no pickle); registry-pattern
   owns the schema (Pydantic validation on both ends).
 
 See `examples/06_registry_integration.py` for the in-process version
@@ -274,7 +274,7 @@ logging.basicConfig(level=logging.INFO)
 # now @task calls emit task.start / task.done / task.error
 ```
 
-`LoggingObserver` stays for the case where you want args/result detail
+`LoggingReporter` stays for the case where you want args/result detail
 beyond the default.
 
 ## API Reference
@@ -355,8 +355,8 @@ my_task.state.get("key")  # "value"
 # Server
 server = RPCServer(queue, executor, service_name="myservice")
 server.register(name=None)(func)  # Register method
-server.start()
-server.stop()
+server.serve()
+server.stop()  # serve() takes a stop_event for graceful shutdown
 
 # Client
 client = RPCClient(queue, service_name="myservice", timeout=30.0)

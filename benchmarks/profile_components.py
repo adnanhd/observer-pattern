@@ -35,7 +35,7 @@ import time
 import tracemalloc
 from pathlib import Path
 
-from callpyback import (
+from eventforge import (
     BroadcastDispatcher,
     ConcurrentDispatcher,
     Dispatcher,
@@ -158,7 +158,7 @@ def section_task_lifecycle(suite: BenchSuite) -> None:
 
 def section_workqueue(suite: BenchSuite) -> None:
     banner("SECTION 4 -- WorkQueue enqueue + dequeue (50 batches of 100)")
-    from callpyback import WorkQueue
+    from eventforge import WorkQueue
 
     q = WorkQueue()
     TOPIC = "bench.workqueue"

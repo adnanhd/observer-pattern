@@ -1,7 +1,7 @@
 """Event-driven observability + dispatch.
 
 Single mechanism (``Observable`` + ``Eventful`` + ``Dispatcher``) covers every
-flow callpyback supports: in-process pub-sub, cross-process RPC, work queues
+flow eventforge supports: in-process pub-sub, cross-process RPC, work queues
 with ack/nack, parallel fanout, resource-aware load balancing.
 
 Core concepts
@@ -16,7 +16,7 @@ Core concepts
                     ``.on(fn)`` subscribes, ``.fire(*args)`` invokes the
                     Dispatcher with the subscriber list.
 
-``Dispatcher``      Delivery policy. The actual VALUE callpyback adds beyond
+``Dispatcher``      Delivery policy. The actual VALUE eventforge adds beyond
                     a plain event bus. Choose Broadcast / RoundRobin /
                     Concurrent / Queue / Transport / LeastLoaded /
                     ResourceAware as the run-time backing.
@@ -55,7 +55,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Union
 
-from callpyback.types import TaskContext
+from eventforge.types import TaskContext
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 class ExecutionContext:
     """Context passed to listeners during execution.
 
-    Compatible with :class:`callpyback.types.TaskContext` for fields that
+    Compatible with :class:`eventforge.types.TaskContext` for fields that
     overlap (func_name, args, kwargs, result, error, metadata, ...). Use the
     :class:`Context` alias below for type hints that accept either.
     """
@@ -744,7 +744,7 @@ class LoggingReporter(Reporter):
         level: int = logging.INFO,
         log_args: bool = False,
         log_result: bool = False,
-        logger_name: str = "callpyback",
+        logger_name: str = "eventforge",
     ) -> None:
         self._level = level
         self._log_args = log_args

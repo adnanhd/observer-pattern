@@ -12,12 +12,12 @@ import random
 import threading
 import time
 
-from callpyback import (
+from eventforge import (
     ExecutionMode,
     Executor,
     MessageQueue,
-    MetricsObserver,
-    TimingObserver,
+    MetricsMeter,
+    TimingMeter,
     task,
 )
 
@@ -29,8 +29,8 @@ def main():
     queue = MessageQueue()
     executor = Executor(mode=ExecutionMode.THREAD, max_workers=8)
 
-    timing = TimingObserver()
-    metrics = MetricsObserver()
+    timing = TimingMeter()
+    metrics = MetricsMeter()
 
     # Track results
     results = {"success": [], "failure": []}

@@ -1,11 +1,11 @@
-"""Tests for callpyback.rpc module."""
+"""Tests for eventforge.rpc module."""
 
 import threading
 import time
 
 import pytest
 
-from callpyback import Executor, MessageQueue, RPCClient, RPCServer
+from eventforge import Executor, MessageQueue, RPCClient, RPCServer
 
 
 class TestRPC:

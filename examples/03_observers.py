@@ -1,30 +1,30 @@
 """Observers - profiling and monitoring task execution.
 
 Demonstrates:
-- TimingObserver, MetricsObserver, LoggingObserver
-- MemoryObserver, CPUObserver
+- TimingMeter, MetricsMeter, LoggingReporter
+- MemoryMeter, CPUMeter
 - Custom observers
 - @observe decorator
 """
 
 import time
 
-from callpyback import (
-    CPUObserver,
-    LoggingObserver,
-    MemoryObserver,
-    MetricsObserver,
+from eventforge import (
+    CPUMeter,
+    LoggingReporter,
+    MemoryMeter,
+    MetricsMeter,
     Observer,
-    TimingObserver,
+    TimingMeter,
     observe,
 )
 
 
 def main():
     # Timing observer
-    print("=== TimingObserver ===")
+    print("=== TimingMeter ===")
 
-    timing = TimingObserver(threshold=0.1)
+    timing = TimingMeter(threshold=0.1)
 
     @observe(timing)
     def slow_task():
@@ -43,9 +43,9 @@ def main():
     print(f"Timings: {timing.timings}")
 
     # Metrics observer
-    print("\n=== MetricsObserver ===")
+    print("\n=== MetricsMeter ===")
 
-    metrics = MetricsObserver()
+    metrics = MetricsMeter()
 
     @observe(metrics)
     def maybe_fail(should_fail: bool):
@@ -65,8 +65,8 @@ def main():
     # Multiple observers
     print("\n=== Multiple Observers ===")
 
-    timing2 = TimingObserver()
-    metrics2 = MetricsObserver()
+    timing2 = TimingMeter()
+    metrics2 = MetricsMeter()
 
     @observe(timing2, metrics2)
     def multi_observed():
@@ -80,9 +80,9 @@ def main():
     print(f"Metrics: {metrics2.stats}")
 
     # Memory observer
-    print("\n=== MemoryObserver ===")
+    print("\n=== MemoryMeter ===")
 
-    memory = MemoryObserver()
+    memory = MemoryMeter()
 
     @observe(memory)
     def allocate_memory():

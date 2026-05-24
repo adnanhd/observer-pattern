@@ -10,7 +10,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator
 
 if TYPE_CHECKING:
-    from callpyback.executor import Executor
+    from eventforge.executor import Executor
 
 
 class TaskStatus(str, Enum):

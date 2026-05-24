@@ -13,7 +13,7 @@ Both use `MessageQueue` as the transport layer.
 ## Basic Usage
 
 ```python
-from callpyback import MessageQueue, RPCServer, RPCClient
+from eventforge import MessageQueue, RPCServer, RPCClient
 
 queue = MessageQueue()
 
@@ -101,7 +101,7 @@ result = client.call("slow_method", timeout=10.0)
 
 ```python
 import asyncio
-from callpyback import MessageQueue, RPCServer, RPCClient
+from eventforge import MessageQueue, RPCServer, RPCClient
 
 async def main():
     queue = MessageQueue()
@@ -234,7 +234,7 @@ class RPCResponse(BaseModel):
 ### Microservice Pattern
 
 ```python
-from callpyback import MessageQueue, RPCServer, RPCClient
+from eventforge import MessageQueue, RPCServer, RPCClient
 
 # Shared queue (in production, use Redis/ZMQ transport)
 queue = MessageQueue()
@@ -280,7 +280,7 @@ print(order)
 ### Worker Pool
 
 ```python
-from callpyback import MessageQueue, RPCServer, Executor, ExecutionMode
+from eventforge import MessageQueue, RPCServer, Executor, ExecutionMode
 import threading
 
 queue = MessageQueue()

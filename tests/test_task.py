@@ -1,11 +1,11 @@
-"""Tests for callpyback.task module."""
+"""Tests for eventforge.task module."""
 
 import threading
 import time
 
 import pytest
 
-from callpyback import (
+from eventforge import (
     ExecutionMode,
     Executor,
     MessageQueue,

@@ -8,8 +8,8 @@ from queue import Empty, Queue
 from typing import Callable, Dict, List, Optional
 from uuid import uuid4
 
-from callpyback.transports.base import Transport
-from callpyback.types import Message
+from eventforge.transports.base import Transport
+from eventforge.types import Message
 
 
 class MemoryTransport(Transport):

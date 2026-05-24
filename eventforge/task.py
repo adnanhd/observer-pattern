@@ -7,9 +7,9 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
-from callpyback.executor import ExecutionMode, Executor
-from callpyback.observers import Eventful, Meter, Observable
-from callpyback.types import Message, SharedState, TaskContext
+from eventforge.executor import ExecutionMode, Executor
+from eventforge.observers import Eventful, Meter, Observable
+from eventforge.types import Message, SharedState, TaskContext
 
 logger = logging.getLogger(__name__)
 
@@ -378,7 +378,7 @@ def task(
         instance_timeout: Timeout in seconds waiting for slot (None = forever)
 
     Example:
-        from callpyback import task, MessageQueue, Executor, TimingMeter
+        from eventforge import task, MessageQueue, Executor, TimingMeter
 
         queue = MessageQueue()
         executor = Executor(mode=ExecutionMode.THREAD)

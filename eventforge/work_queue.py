@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from callpyback.queue import MessageQueue
-from callpyback.transports.base import Transport
-from callpyback.types import Message
+from eventforge.queue import MessageQueue
+from eventforge.transports.base import Transport
+from eventforge.types import Message
 
 
 class QueueFullError(Exception):

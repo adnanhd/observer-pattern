@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Quick benchmarks for callpyback hot paths.
+"""Quick benchmarks for eventforge hot paths.
 
 Two angles:
 
@@ -12,7 +12,7 @@ for proper profiling -- just a smell-test for regression catches.
 
 Run::
 
-    PYTHONPATH=. python benchmarks/callpyback_bench.py
+    PYTHONPATH=. python benchmarks/eventforge_bench.py
 """
 
 from __future__ import annotations
@@ -23,17 +23,17 @@ import threading
 import time
 from typing import Any, List
 
-from callpyback import (
+from eventforge import (
     ExecutionMode,
     Executor,
     MessageQueue,
     Observer,
     RPCClient,
     RPCServer,
-    TimingObserver,
+    TimingMeter,
     task,
 )
-from callpyback.transports.tcp import TCPClientTransport, TCPServerTransport
+from eventforge.transports.tcp import TCPClientTransport, TCPServerTransport
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -73,13 +73,13 @@ def bench_task_overhead() -> None:
 
     decorated = task()(bare)
 
-    timing = TimingObserver()
+    timing = TimingMeter()
     decorated_observed = task(on_execute=[timing])(bare)
 
     cases = {
         "bare function call         ": lambda: bare(7),
         "@task() no observer        ": lambda: decorated(7),
-        "@task() with TimingObserver": lambda: decorated_observed(7),
+        "@task() with TimingMeter": lambda: decorated_observed(7),
     }
     for label, fn in cases.items():
         stats = timeit_ms(fn)

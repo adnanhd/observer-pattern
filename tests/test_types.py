@@ -1,10 +1,10 @@
-"""Tests for callpyback.types module."""
+"""Tests for eventforge.types module."""
 
 from datetime import datetime
 
 import pytest
 
-from callpyback.types import (
+from eventforge.types import (
     Message,
     RPCRequest,
     RPCResponse,

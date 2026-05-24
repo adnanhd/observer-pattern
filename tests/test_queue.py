@@ -1,11 +1,11 @@
-"""Tests for callpyback.queue module."""
+"""Tests for eventforge.queue module."""
 
 import time
 
 import pytest
 
-from callpyback import MessageQueue
-from callpyback.types import Message
+from eventforge import MessageQueue
+from eventforge.types import Message
 
 
 class TestMessageQueue:

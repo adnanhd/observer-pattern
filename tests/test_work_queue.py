@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from callpyback.work_queue import InFlightEntry, QueueFullError, WorkQueue
+from eventforge.work_queue import InFlightEntry, QueueFullError, WorkQueue
 
 # ---------------------------------------------------------------------------
 # Enqueue

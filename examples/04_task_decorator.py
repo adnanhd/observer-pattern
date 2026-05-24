@@ -10,12 +10,12 @@ Demonstrates:
 import threading
 import time
 
-from callpyback import (
+from eventforge import (
     ExecutionMode,
     Executor,
     MessageQueue,
-    MetricsObserver,
-    TimingObserver,
+    MetricsMeter,
+    TimingMeter,
     task,
 )
 
@@ -37,8 +37,8 @@ def main():
     # @task with observers
     print("\n=== @task with Observers ===")
 
-    timing = TimingObserver()
-    metrics = MetricsObserver()
+    timing = TimingMeter()
+    metrics = MetricsMeter()
 
     @task(
         executor=executor,
@@ -111,7 +111,7 @@ def main():
     @task(
         executor=executor,
         max_instances=2,  # Only 2 concurrent executions
-        on_execute=[TimingObserver()],
+        on_execute=[TimingMeter()],
     )
     def limited_task(task_id: int) -> int:
         with lock:

@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from callpyback import (
+from eventforge import (
     BroadcastDispatcher,
     ConcurrentDispatcher,
     Eventful,

@@ -3,24 +3,34 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "callpyback"
-version = "3.0.0"
-description = "Message-driven function pipelines with pub-sub, executors, and RPC"
+name = "eventforge"
+version = "0.1.0"
+description = "Observer + pub-sub + RPC + work-queue primitives, one package."
 authors = [{ name = "Adnan Harun Dogan", email = "adnanharundogan@gmail.com" }]
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
+keywords = [
+    "observer-pattern",
+    "pubsub",
+    "rpc",
+    "work-queue",
+    "messaging",
+    "events",
+    "dispatcher",
+]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
     "Typing :: Typed",
 ]
 dependencies = [
@@ -29,34 +39,45 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-redis = ["redis>=4.0.0"]
-zmq = ["pyzmq>=25.0.0"]
+# Pydantic Logfire span emission from LogfireMeter / LogfireMetricLogger.
+logfire = ["logfire>=1.0.0"]
+# Dev / test
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-asyncio>=0.21.0",
     "mypy>=1.0.0",
     "ruff>=0.1.0",
+    "build",
+    "twine",
+]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=2.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/adnanharundogan/callpyback"
-Repository = "https://github.com/adnanharundogan/callpyback.git"
-Issues = "https://github.com/adnanharundogan/callpyback/issues"
+Homepage = "https://github.com/adnanhd/eventforge"
+Repository = "https://github.com/adnanhd/eventforge"
+Issues = "https://github.com/adnanhd/eventforge/issues"
+Changelog = "https://github.com/adnanhd/eventforge/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["callpyback*"]
+include = ["eventforge*"]
+
+[tool.setuptools.package-data]
+eventforge = ["py.typed"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 strict = true
 
 [tool.ruff]
 line-length = 88
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]

@@ -1,4 +1,4 @@
-"""Example 06: callpyback transports + registry-pattern envelopes.
+"""Example 06: eventforge transports + registry-pattern envelopes.
 
 End-to-end story for the local-builds, remote-runs, result-returns split:
 
@@ -12,9 +12,9 @@ End-to-end story for the local-builds, remote-runs, result-returns split:
     work, returns a JSON-friendly result.
   - Local side gets the result back via the same RPC call.
 
-callpyback never sees the model object itself -- only the JSON-shaped
+eventforge never sees the model object itself -- only the JSON-shaped
 envelope produced by registry-pattern. This is the "registry-pattern
-owns serialization / message integrity, callpyback owns execution /
+owns serialization / message integrity, eventforge owns execution /
 dispatch" division of responsibilities.
 
 No real CPU work in this demo -- the point is the wire format. Run::
@@ -28,7 +28,7 @@ from typing import Any
 
 from registry import TypeRegistry, build, serialize
 
-from callpyback import MessageQueue, RPCClient, RPCServer
+from eventforge import MessageQueue, RPCClient, RPCServer
 
 # =============================================================================
 # Domain: a tiny model registered with registry-pattern
@@ -96,14 +96,14 @@ def main() -> None:
         envelope = serialize(local_model, serializator="python", repo="examples.models")
         print("envelope on the wire:", envelope)
 
-        # 2) Dispatch the envelope + a batch to the remote handler via callpyback.
+        # 2) Dispatch the envelope + a batch to the remote handler via eventforge.
         result = client.call("train_step", envelope, [1.0, 2.0, 3.0, 4.0])
         print("\nremote result:", result)
 
         # 3) Reconstructed model on the remote side matches the local definition.
         assert result["model_class"] == "MLP"
         assert result["n_features"] == 4
-        print("\nround-trip OK -- registry-pattern serialized, callpyback dispatched.")
+        print("\nround-trip OK -- registry-pattern serialized, eventforge dispatched.")
     finally:
         server.stop()
 
