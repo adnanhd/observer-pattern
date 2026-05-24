@@ -16,20 +16,20 @@ CallPyBack is a Python library for building message-driven applications with:
 ## Installation
 
 ```bash
-pip install callpyback
+pip install eventforge
 
 # Optional transports
-pip install callpyback[redis]
-pip install callpyback[zmq]
+pip install eventforge[redis]
+pip install eventforge[zmq]
 ```
 
 ## Quick Start
 
 ```python
-from callpyback import task, MessageQueue, Executor, ExecutionMode, TimingObserver
+from eventforge import task, MessageQueue, Executor, ExecutionMode, TimingMeter
 
 queue = MessageQueue()
-timing = TimingObserver()
+timing = TimingMeter()
 
 # Task with full lifecycle support
 @task(
@@ -112,9 +112,9 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     participant T as TaskRunner
-    participant Ti as TimingObserver
-    participant Me as MetricsObserver
-    participant Mo as MemoryObserver
+    participant Ti as TimingMeter
+    participant Me as MetricsMeter
+    participant Mo as MemoryMeter
     participant F as Function
 
     T->>Ti: on_start(ctx)
@@ -208,7 +208,7 @@ flowchart TB
 ## Architecture
 
 ```
-callpyback/
+eventforge/
 ├── types.py          # Pydantic models (Message, TaskResult, TaskContext, etc.)
 ├── transports/       # Message transport backends
 │   ├── base.py       # Transport protocol

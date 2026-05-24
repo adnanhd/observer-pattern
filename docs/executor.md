@@ -13,7 +13,7 @@ Unified task executor with sequential, thread, and process modes.
 ## Execution Modes
 
 ```python
-from callpyback import Executor, ExecutionMode
+from eventforge import Executor, ExecutionMode
 
 # Sequential (default) - runs in current thread
 executor = Executor(mode=ExecutionMode.SEQUENTIAL)
@@ -28,7 +28,7 @@ executor = Executor(mode=ExecutionMode.PROCESS, max_workers=4)
 ## Basic Usage
 
 ```python
-from callpyback import Executor, ExecutionMode
+from eventforge import Executor, ExecutionMode
 
 def compute(n):
     return sum(range(n))
@@ -49,7 +49,7 @@ with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
 Process multiple items in parallel:
 
 ```python
-from callpyback import Executor, ExecutionMode
+from eventforge import Executor, ExecutionMode
 
 def square(x):
     return x ** 2
@@ -66,7 +66,7 @@ with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
 For CPU-bound tasks, use process mode to bypass the GIL:
 
 ```python
-from callpyback import Executor, ExecutionMode
+from eventforge import Executor, ExecutionMode
 
 def cpu_intensive(n):
     """CPU-bound computation."""
@@ -87,7 +87,7 @@ with Executor(mode=ExecutionMode.PROCESS, max_workers=4) as executor:
 
 ```python
 import asyncio
-from callpyback import Executor, ExecutionMode
+from eventforge import Executor, ExecutionMode
 
 async def main():
     async with Executor(mode=ExecutionMode.THREAD) as executor:
@@ -111,7 +111,7 @@ asyncio.run(main())
 Failed tasks return results with error information:
 
 ```python
-from callpyback import Executor
+from eventforge import Executor
 
 def failing_task(x):
     if x < 0:
@@ -130,7 +130,7 @@ with Executor() as executor:
 ## Timeouts
 
 ```python
-from callpyback import Executor
+from eventforge import Executor
 import time
 
 def slow_task():
@@ -228,7 +228,7 @@ class TaskResult(BaseModel):
 ### Parallel File Processing
 
 ```python
-from callpyback import Executor, ExecutionMode
+from eventforge import Executor, ExecutionMode
 from pathlib import Path
 
 def process_file(filepath):
@@ -249,7 +249,7 @@ with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
 ### CPU-Bound Batch Processing
 
 ```python
-from callpyback import Executor, ExecutionMode
+from eventforge import Executor, ExecutionMode
 import math
 
 def calculate_primes(n):
@@ -273,7 +273,7 @@ with Executor(mode=ExecutionMode.PROCESS, max_workers=4) as executor:
 ### Mixed Workload
 
 ```python
-from callpyback import Executor, ExecutionMode
+from eventforge import Executor, ExecutionMode
 
 # Use thread mode for I/O
 io_executor = Executor(mode=ExecutionMode.THREAD, max_workers=8)

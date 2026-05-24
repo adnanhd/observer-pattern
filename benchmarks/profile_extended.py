@@ -29,7 +29,7 @@ import pstats
 import sys
 from pathlib import Path
 
-from callpyback import (
+from eventforge import (
     BroadcastDispatcher,
     ConcurrentDispatcher,
     Dispatcher,
@@ -41,8 +41,8 @@ from callpyback import (
     TimingMeter,
     task,
 )
-from callpyback.task import TaskPool
-from callpyback.transports.memory import MemoryTransport
+from eventforge.task import TaskPool
+from eventforge.transports.memory import MemoryTransport
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench import BenchSuite, banner, finalize, parse_args  # noqa: E402
@@ -159,7 +159,7 @@ def section_taskpool(suite: BenchSuite) -> None:
 
 def section_reporter_lifecycle(suite: BenchSuite) -> None:
     banner("SECTION 4 -- Reporter @observe auto-wiring")
-    from callpyback import Reporter, observe
+    from eventforge import Reporter, observe
 
     class TargetMeter(Meter):
         name = "target"
@@ -195,7 +195,7 @@ def section_reporter_lifecycle(suite: BenchSuite) -> None:
 
 def section_executor_modes(suite: BenchSuite) -> None:
     banner("SECTION 5 -- Executor submit + result roundtrip")
-    from callpyback import ExecutionMode, Executor
+    from eventforge import ExecutionMode, Executor
 
     def trivial(x: int) -> int:
         return x

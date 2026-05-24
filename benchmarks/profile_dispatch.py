@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """cProfile the in-process dispatch hot paths.
 
-Complements ``callpyback_bench.py`` (which reports median/p95 latencies) by
+Complements ``eventforge_bench.py`` (which reports median/p95 latencies) by
 attributing time inside dispatch to specific functions. Skips the TCP
 roundtrip path because cProfile is not useful for socket I/O.
 
@@ -22,8 +22,8 @@ import cProfile
 import io
 import pstats
 
-from callpyback import TimingMeter, task
-from callpyback.observers import Eventful
+from eventforge import TimingMeter, task
+from eventforge.observers import Eventful
 
 
 def workload_a_eventful_dispatch(iterations: int = 50_000) -> None:

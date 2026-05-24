@@ -7,9 +7,9 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from callpyback.executor import ExecutionMode, Executor
-from callpyback.queue import MessageQueue
-from callpyback.types import Message, RPCRequest, RPCResponse
+from eventforge.executor import ExecutionMode, Executor
+from eventforge.queue import MessageQueue
+from eventforge.types import Message, RPCRequest, RPCResponse
 
 
 class RPCServer:

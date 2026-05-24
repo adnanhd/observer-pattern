@@ -13,7 +13,7 @@ from queue import Queue
 from typing import Any, Callable, Dict, Iterable, List, Optional
 from uuid import uuid4
 
-from callpyback.types import TaskRequest, TaskResult, TaskStatus
+from eventforge.types import TaskRequest, TaskResult, TaskStatus
 
 logger = logging.getLogger(__name__)
 

@@ -31,8 +31,8 @@ from typing import Any
 
 from registry import TypeRegistry, build, serialize
 
-from callpyback import MessageQueue, RPCClient
-from callpyback.transports.tcp import TCPClientTransport
+from eventforge import MessageQueue, RPCClient
+from eventforge.transports.tcp import TCPClientTransport
 
 # =============================================================================
 # Domain
@@ -65,8 +65,8 @@ WORKER_SOURCE = textwrap.dedent("""
     import sys, time
     from typing import Any
     from registry import TypeRegistry, build
-    from callpyback import MessageQueue, RPCServer
-    from callpyback.transports.tcp import TCPServerTransport
+    from eventforge import MessageQueue, RPCServer
+    from eventforge.transports.tcp import TCPServerTransport
 
     class ModelRegistry(TypeRegistry[Any], repo="examples.distributed.models"):
         pass

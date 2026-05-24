@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
-from callpyback.types import Message
+from eventforge.types import Message
 
 
 class Transport(ABC):

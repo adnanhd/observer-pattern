@@ -25,8 +25,8 @@ from queue import Empty, Queue
 from typing import Callable, Dict, List, Optional
 from uuid import uuid4
 
-from callpyback.transports.base import Transport
-from callpyback.types import Message
+from eventforge.transports.base import Transport
+from eventforge.types import Message
 
 logger = logging.getLogger(__name__)
 
@@ -76,17 +76,27 @@ def _topic_matches(topic: str, pattern: str) -> bool:
 
 
 class TCPServerTransport(Transport):
-    """TCP server transport — accepts connections, dispatches messages.
+    """TCP server transport -- accepts connections, dispatches messages.
+
+    .. warning::
+
+       This transport ships **no authentication and no transport
+       encryption**. Default ``host="127.0.0.1"`` keeps the listener
+       bound to loopback so reverse-proxy / SSH-tunnel patterns are
+       the path to multi-host setups. Do not pass ``host="0.0.0.0"``
+       unless the network reachable from that address is one you
+       trust to invoke arbitrary registered RPC methods. See
+       ``SECURITY.md``.
 
     Usage::
 
-        transport = TCPServerTransport(host="0.0.0.0", port=9090)
+        transport = TCPServerTransport(host="127.0.0.1", port=9090)
         transport.start()
         queue = MessageQueue(transport=transport)
-        rpc = RPCServer(queue, service_name="torchestrator")
+        rpc = RPCServer(queue, service_name="myservice")
     """
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 9090) -> None:
+    def __init__(self, host: str = "127.0.0.1", port: int = 9090) -> None:
         self._host = host
         self._port = port
         self._server_sock: Optional[socket.socket] = None

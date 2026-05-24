@@ -13,7 +13,7 @@ Bridge message queues across distributed nodes.
 ## Basic Usage
 
 ```python
-from callpyback import MessageQueue, RemoteQueue
+from eventforge import MessageQueue, RemoteQueue
 
 # Node 1
 queue1 = MessageQueue()
@@ -195,7 +195,7 @@ class RemoteSubscription:
 ### Distributed Event System
 
 ```python
-from callpyback import MessageQueue, RemoteQueue
+from eventforge import MessageQueue, RemoteQueue
 
 # Create nodes
 nodes = {}
@@ -232,7 +232,7 @@ nodes["gateway"].publish("orders.placed", {"id": 100, "user_id": 1})
 ### Hub-and-Spoke Pattern
 
 ```python
-from callpyback import MessageQueue, RemoteQueue
+from eventforge import MessageQueue, RemoteQueue
 
 # Central hub
 hub_queue = MessageQueue()
@@ -262,7 +262,7 @@ hub.broadcast("commands.execute", {"action": "sync"})
 ### Federated Services
 
 ```python
-from callpyback import MessageQueue, RemoteQueue, RPCServer, RPCClient
+from eventforge import MessageQueue, RemoteQueue, RPCServer, RPCClient
 
 # Region A
 region_a_queue = MessageQueue()

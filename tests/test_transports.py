@@ -1,12 +1,12 @@
-"""Tests for callpyback.transports module."""
+"""Tests for eventforge.transports module."""
 
 import threading
 import time
 
 import pytest
 
-from callpyback.transports import MemoryTransport
-from callpyback.types import Message
+from eventforge.transports import MemoryTransport
+from eventforge.types import Message
 
 
 class TestMemoryTransport:

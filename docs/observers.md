@@ -14,10 +14,10 @@ Observers provide hooks into function execution for:
 ## Basic Usage
 
 ```python
-from callpyback import observe, TimingObserver, MetricsObserver
+from eventforge import observe, TimingMeter, MetricsMeter
 
-timing = TimingObserver()
-metrics = MetricsObserver()
+timing = TimingMeter()
+metrics = MetricsMeter()
 
 @observe(timing, metrics)
 def my_function(x):
@@ -32,15 +32,15 @@ print(metrics.stats)  # {'calls': 2, 'successes': 2, ...}
 
 ## Built-in Observers
 
-### TimingObserver
+### TimingMeter
 
 Tracks execution time with optional threshold alerts:
 
 ```python
-from callpyback import observe, TimingObserver
+from eventforge import observe, TimingMeter
 import time
 
-timing = TimingObserver(threshold=1.0)  # Alert if > 1 second
+timing = TimingMeter(threshold=1.0)  # Alert if > 1 second
 
 @observe(timing)
 def slow_function():
@@ -54,14 +54,14 @@ print(timing.stats)
 print(timing.timings)  # [1.5]
 ```
 
-### MetricsObserver
+### MetricsMeter
 
 Tracks call counts and success rates:
 
 ```python
-from callpyback import observe, MetricsObserver
+from eventforge import observe, MetricsMeter
 
-metrics = MetricsObserver()
+metrics = MetricsMeter()
 
 @observe(metrics)
 def maybe_fail(x):
@@ -80,17 +80,17 @@ print(metrics.stats)
 # {'calls': 3, 'successes': 2, 'failures': 1, 'success_rate': 0.666...}
 ```
 
-### LoggingObserver
+### LoggingReporter
 
 Structured logging with configurable verbosity:
 
 ```python
-from callpyback import observe, LoggingObserver
+from eventforge import observe, LoggingReporter
 import logging
 
 logging.basicConfig(level=logging.INFO)
 
-logger = LoggingObserver(
+logger = LoggingReporter(
     log_args=True,    # Log function arguments
     log_result=True,  # Log return value
 )
@@ -104,14 +104,14 @@ add(10, 20)
 # INFO: add completed in 0.0001s with result=30
 ```
 
-### MemoryObserver
+### MemoryMeter
 
 Tracks memory allocation using tracemalloc:
 
 ```python
-from callpyback import observe, MemoryObserver
+from eventforge import observe, MemoryMeter
 
-memory = MemoryObserver()
+memory = MemoryMeter()
 
 @observe(memory)
 def allocate():
@@ -123,14 +123,14 @@ print(memory.stats)
 # {'count': 1, 'avg_current': 4000000, 'avg_peak': 4500000, 'max_peak': 4500000}
 ```
 
-### CPUObserver
+### CPUMeter
 
 Tracks CPU time (user and system):
 
 ```python
-from callpyback import observe, CPUObserver
+from eventforge import observe, CPUMeter
 
-cpu = CPUObserver()
+cpu = CPUMeter()
 
 @observe(cpu)
 def compute():
@@ -147,7 +147,7 @@ print(cpu.stats)
 Running average tracker for metrics:
 
 ```python
-from callpyback import Meter
+from eventforge import Meter
 
 loss_meter = Meter("loss")
 acc_meter = Meter("accuracy")
@@ -168,14 +168,14 @@ loss_meter.reset()
 acc_meter.reset()
 ```
 
-### MeterObserver
+### Meter
 
 Combine meters with observer pattern:
 
 ```python
-from callpyback import observe, MeterObserver
+from eventforge import observe, Meter
 
-meter_obs = MeterObserver({
+meter_obs = Meter({
     "loss": lambda ctx: ctx.result.get("loss"),
     "accuracy": lambda ctx: ctx.result.get("accuracy"),
 })
@@ -197,12 +197,12 @@ print(meter_obs.summary())
 Combine multiple observers:
 
 ```python
-from callpyback import observe, CompositeObserver, TimingObserver, MetricsObserver, LoggingObserver
+from eventforge import observe, CompositeObserver, TimingMeter, MetricsMeter, LoggingReporter
 
 composite = CompositeObserver([
-    TimingObserver(),
-    MetricsObserver(),
-    LoggingObserver(),
+    TimingMeter(),
+    MetricsMeter(),
+    LoggingReporter(),
 ])
 
 @observe(composite)
@@ -215,9 +215,9 @@ def my_function():
 Create custom observers by subclassing `Observer`:
 
 ```python
-from callpyback import Observer, ExecutionContext, observe
+from eventforge import Observer, ExecutionContext, observe
 
-class GPUMemoryObserver(Observer):
+class GPUMemoryMeter(Observer):
     """Track GPU memory usage (requires torch)."""
     
     def __init__(self):
@@ -250,7 +250,7 @@ class GPUMemoryObserver(Observer):
         except ImportError:
             pass
 
-gpu = GPUMemoryObserver()
+gpu = GPUMemoryMeter()
 
 @observe(gpu)
 def gpu_computation():
@@ -262,7 +262,7 @@ def gpu_computation():
 ### FLOPs Observer Example
 
 ```python
-from callpyback import Observer, ExecutionContext, observe
+from eventforge import Observer, ExecutionContext, observe
 
 class FLOPsObserver(Observer):
     """Estimate FLOPs for matrix operations."""
@@ -295,7 +295,7 @@ def matrix_multiply(a, b):
 Quick observer from callback functions:
 
 ```python
-from callpyback import observe, CallbackObserver
+from eventforge import observe, CallbackObserver
 
 observer = CallbackObserver(
     on_start=lambda ctx: print(f"Starting {ctx.func_name}"),
@@ -365,10 +365,10 @@ class Observer(ABC):
         """Called on error. Default: delegates to on_end."""
 ```
 
-### TimingObserver
+### TimingMeter
 
 ```python
-class TimingObserver(Observer):
+class TimingMeter(Observer):
     def __init__(self, threshold: float = None, name: str = "timing"): ...
     
     @property
@@ -380,10 +380,10 @@ class TimingObserver(Observer):
     def reset(self) -> None: ...
 ```
 
-### MetricsObserver
+### MetricsMeter
 
 ```python
-class MetricsObserver(Observer):
+class MetricsMeter(Observer):
     def __init__(self, name: str = "metrics"): ...
     
     @property
@@ -417,11 +417,11 @@ class Meter:
 ### Training Loop Profiling
 
 ```python
-from callpyback import observe, TimingObserver, Meter, MeterObserver
+from eventforge import observe, TimingMeter, Meter, Meter
 
 # Create observers
-forward_timer = TimingObserver(name="forward")
-backward_timer = TimingObserver(name="backward")
+forward_timer = TimingMeter(name="forward")
+backward_timer = TimingMeter(name="backward")
 loss_meter = Meter("loss")
 acc_meter = Meter("accuracy")
 
@@ -456,11 +456,11 @@ for epoch in range(10):
 ### API Endpoint Monitoring
 
 ```python
-from callpyback import observe, TimingObserver, MetricsObserver, LoggingObserver
+from eventforge import observe, TimingMeter, MetricsMeter, LoggingReporter
 
-timing = TimingObserver(threshold=0.5)  # Alert if > 500ms
-metrics = MetricsObserver()
-logger = LoggingObserver()
+timing = TimingMeter(threshold=0.5)  # Alert if > 500ms
+metrics = MetricsMeter()
+logger = LoggingReporter()
 
 @observe(timing, metrics, logger)
 def api_handler(request):

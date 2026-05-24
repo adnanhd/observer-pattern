@@ -1,8 +1,7 @@
 {
-  "include": ["callpyback", "tests", "examples"],
-  "exclude": ["**/__pycache__"],
-  "venvPath": "/home/adhd/.cache/miniconda3/envs",
-  "venv": "UIP",
-  "pythonPath": "/home/adhd/.cache/miniconda3/envs/UIP/bin/python",
-  "pythonVersion": "3.9"
+  "include": ["eventforge", "tests", "examples"],
+  "exclude": ["**/__pycache__", "**/.pytest_cache", "build", "dist"],
+  "pythonVersion": "3.10",
+  "reportMissingImports": "error",
+  "reportMissingTypeStubs": "warning"
 }

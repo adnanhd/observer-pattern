@@ -4,9 +4,9 @@ import threading
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
-from callpyback.queue import MessageQueue
-from callpyback.rpc import RPCClient, RPCServer
-from callpyback.types import Message
+from eventforge.queue import MessageQueue
+from eventforge.rpc import RPCClient, RPCServer
+from eventforge.types import Message
 
 
 class RemoteSubscription:

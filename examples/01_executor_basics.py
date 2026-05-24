@@ -8,7 +8,7 @@ Demonstrates:
 
 import time
 
-from callpyback import ExecutionMode, Executor
+from eventforge import ExecutionMode, Executor
 
 
 def cpu_work(n: int) -> int:

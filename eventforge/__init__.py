@@ -1,13 +1,14 @@
-"""CallPyBack: event-driven task execution with pluggable dispatch.
+"""eventforge: observer pattern + pub-sub + RPC + work queue, one package.
 
-Unified primitive (``Observable`` + ``Eventful`` + ``Dispatcher``) covers
-in-process pub-sub, cross-process RPC, work queues, parallel fanout, and
-resource-aware load balancing. Meters measure tasks and emit events;
-Reporters subscribe to Meter emissions and ship them externally.
+A unified ``Observable`` + ``Eventful`` + ``Dispatcher`` primitive
+covers in-process pub-sub, cross-process RPC, work queues, parallel
+fan-out, and resource-aware load balancing. Meters measure tasks and
+emit events; Reporters subscribe to Meter emissions and ship them
+externally (logging, syslog, OpenTelemetry, ...).
 """
 
-from callpyback.executor import ExecutionMode, Executor
-from callpyback.observers import (
+from eventforge.executor import ExecutionMode, Executor
+from eventforge.observers import (
     BroadcastDispatcher,
     ConcurrentDispatcher,
     CPUMeter,
@@ -26,17 +27,17 @@ from callpyback.observers import (
     TimingMeter,
     observe,
 )
-from callpyback.queue import MessageQueue
-from callpyback.remote import RemoteQueue, RemoteSubscription
-from callpyback.rpc import RoundRobinRPCClient, RPCClient, RPCServer, with_retry
-from callpyback.task import TaskPool, TaskRunner, task
-from callpyback.transports import (
+from eventforge.queue import MessageQueue
+from eventforge.remote import RemoteQueue, RemoteSubscription
+from eventforge.rpc import RoundRobinRPCClient, RPCClient, RPCServer, with_retry
+from eventforge.task import TaskPool, TaskRunner, task
+from eventforge.transports import (
     MemoryTransport,
     TCPClientTransport,
     TCPServerTransport,
     Transport,
 )
-from callpyback.types import (
+from eventforge.types import (
     Message,
     RPCRequest,
     RPCResponse,
@@ -46,9 +47,9 @@ from callpyback.types import (
     TaskResult,
     TaskStatus,
 )
-from callpyback.work_queue import QueueFullError, WorkQueue
+from eventforge.work_queue import QueueFullError, WorkQueue
 
-__version__ = "4.0.0"
+__version__ = "0.1.0"
 __author__ = "Adnan Harun Dogan"
 __email__ = "adnanharundogan@gmail.com"
 

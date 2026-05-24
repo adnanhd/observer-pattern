@@ -1,11 +1,11 @@
-"""Tests for callpyback.executor module."""
+"""Tests for eventforge.executor module."""
 
 import time
 
 import pytest
 
-from callpyback import ExecutionMode, Executor
-from callpyback.types import TaskStatus
+from eventforge import ExecutionMode, Executor
+from eventforge.types import TaskStatus
 
 
 def slow_task(duration):

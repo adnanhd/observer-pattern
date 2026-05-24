@@ -13,7 +13,7 @@ Thread-safe pub-sub message queue with Pydantic validation.
 ## Basic Usage
 
 ```python
-from callpyback import MessageQueue
+from eventforge import MessageQueue
 
 queue = MessageQueue()
 
@@ -61,7 +61,7 @@ print(response.payload)  # 30
 
 ```python
 import asyncio
-from callpyback import MessageQueue
+from eventforge import MessageQueue
 
 async def main():
     queue = MessageQueue()
@@ -88,7 +88,7 @@ asyncio.run(main())
 Messages are Pydantic models with the following fields:
 
 ```python
-from callpyback import Message
+from eventforge import Message
 
 msg = Message(
     topic="events.user",
@@ -153,7 +153,7 @@ class MessageQueue:
 ### Event Bus
 
 ```python
-from callpyback import MessageQueue
+from eventforge import MessageQueue
 
 queue = MessageQueue()
 
@@ -180,7 +180,7 @@ queue.publish("user.created", {"id": 1, "email": "alice@example.com"})
 ### Worker Queue
 
 ```python
-from callpyback import MessageQueue
+from eventforge import MessageQueue
 import threading
 
 queue = MessageQueue()

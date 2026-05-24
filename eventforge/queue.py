@@ -21,10 +21,10 @@ import threading
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
-from callpyback.observers import BroadcastDispatcher, Dispatcher, Eventful, Observable
-from callpyback.transports.base import Transport
-from callpyback.transports.memory import MemoryTransport
-from callpyback.types import Message
+from eventforge.observers import BroadcastDispatcher, Dispatcher, Eventful, Observable
+from eventforge.transports.base import Transport
+from eventforge.transports.memory import MemoryTransport
+from eventforge.types import Message
 
 Handler = Callable[[Message], None]
 AsyncHandler = Callable[[Message], Any]

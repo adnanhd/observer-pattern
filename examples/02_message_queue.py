@@ -5,7 +5,7 @@ Demonstrates:
 - Request-reply pattern with RPC
 """
 
-from callpyback import MessageQueue, RPCClient, RPCServer
+from eventforge import MessageQueue, RPCClient, RPCServer
 
 
 def main():

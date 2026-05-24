@@ -14,7 +14,7 @@ CallPyBack uses Pydantic v2 models for:
 Message for pub-sub communication:
 
 ```python
-from callpyback import Message
+from eventforge import Message
 
 msg = Message(
     topic="events.user.created",
@@ -48,7 +48,7 @@ print(msg.correlation_id)  # Optional[str]
 Enum for task execution status:
 
 ```python
-from callpyback import TaskStatus
+from eventforge import TaskStatus
 
 TaskStatus.PENDING     # Task queued, not started
 TaskStatus.RUNNING     # Task currently executing
@@ -62,7 +62,7 @@ TaskStatus.CANCELLED   # Task was cancelled
 Request to execute a task:
 
 ```python
-from callpyback import TaskRequest
+from eventforge import TaskRequest
 
 request = TaskRequest(
     func_name="compute",
@@ -96,7 +96,7 @@ print(request.timeout)    # 30.0
 Result of task execution:
 
 ```python
-from callpyback import TaskResult, TaskStatus
+from eventforge import TaskResult, TaskStatus
 
 # Success result
 result = TaskResult(
@@ -149,7 +149,7 @@ print(error_result.error_type)  # "ZeroDivisionError"
 RPC method call request:
 
 ```python
-from callpyback import RPCRequest
+from eventforge import RPCRequest
 
 request = RPCRequest(
     method="add",
@@ -180,7 +180,7 @@ print(request.timeout)  # 30.0
 RPC method call response:
 
 ```python
-from callpyback import RPCResponse
+from eventforge import RPCResponse
 
 # Success response
 response = RPCResponse(
@@ -225,7 +225,7 @@ print(error_response.error)       # "Method not found"
 Topic subscription:
 
 ```python
-from callpyback.types import Subscription
+from eventforge.types import Subscription
 
 sub = Subscription(
     topic="events.*",
@@ -242,7 +242,7 @@ print(sub.pattern)  # True
 All models support JSON serialization:
 
 ```python
-from callpyback import Message
+from eventforge import Message
 import json
 
 msg = Message(topic="test", payload={"key": "value"})
@@ -266,7 +266,7 @@ Extend types with custom validation:
 
 ```python
 from pydantic import BaseModel, field_validator
-from callpyback import Message
+from eventforge import Message
 
 class ValidatedMessage(Message):
     @field_validator("topic")
@@ -288,7 +288,7 @@ msg = ValidatedMessage(topic="invalid", payload={})
 All types are fully typed for IDE support:
 
 ```python
-from callpyback import Message, TaskResult, TaskStatus
+from eventforge import Message, TaskResult, TaskStatus
 from typing import Optional
 
 def process_message(msg: Message) -> Optional[TaskResult]:
