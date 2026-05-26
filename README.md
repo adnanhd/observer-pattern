@@ -73,9 +73,37 @@ Key features:
 - **Lifecycle handlers**: `on_success`, `on_failure`, `on_complete`
 - **Auto-publish**: Results published to `{topic}.success` / `{topic}.failure`
 
-### Executor
+#### Local vs remote dispatch
 
-Run tasks in sequential, thread, or process mode:
+The same `@task` can run locally or dispatch to a remote RPC worker via the
+`caller=` parameter. The local function body is the reference impl; when a
+remote caller is used, the body is NOT executed -- instead the server's
+registered method of the SAME name runs.
+
+```python
+from eventforge import task, MessageQueue, LocalProcedureCaller, RPCClient
+
+# Local: LocalProcedureCaller runs the body in-process.
+@task(caller=LocalProcedureCaller())
+def predict(x):
+    return x * 2
+
+predict(5)  # 10, runs locally
+
+# Remote: RPCClient dispatches to the worker's "predict" method by name.
+client = RPCClient(MessageQueue(), service_name="ml")
+
+@task(caller=client)
+def predict(x):
+    return x * 2  # reference impl only; the remote "predict" actually runs
+
+predict(5)  # -> result computed by the remote RPC worker
+```
+
+### LocalProcedureCaller
+
+Run tasks in sequential, thread, or process mode. (`Executor` remains as a
+deprecated alias for `LocalProcedureCaller`; prefer the new name.)
 
 ```python
 from eventforge import Executor, ExecutionMode
@@ -309,10 +337,10 @@ queue.request(topic, payload, timeout)    # Request-reply (sync)
 await queue.request_async(...)            # Request-reply (async)
 ```
 
-### Executor
+### LocalProcedureCaller (alias: Executor)
 
 ```python
-executor = Executor(
+executor = LocalProcedureCaller(
     mode=ExecutionMode.SEQUENTIAL,  # SEQUENTIAL, THREAD, or PROCESS
     max_workers=4,
     queue=None  # Optional MessageQueue for events
@@ -331,7 +359,8 @@ stats = executor.stats()
 @task(
     queue=None,           # MessageQueue for pub-sub integration
     topic=None,           # Topic name (defaults to function name)
-    executor=None,        # Executor instance (defaults to SEQUENTIAL)
+    caller=None,          # Caller: LocalProcedureCaller (default) or RPCClient
+    executor=None,        # Deprecated alias for caller
     on_execute=None,      # List of observers for lifecycle hooks
     on_success=None,      # Handler called on success (receives TaskContext)
     on_failure=None,      # Handler called on failure (receives TaskContext)
