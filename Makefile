@@ -6,8 +6,8 @@ help:
 	@echo "  install-dev  pip-install with [dev] extras"
 	@echo "  test         pytest"
 	@echo "  test-cov     pytest + coverage report"
-	@echo "  lint         ruff check + black --check"
-	@echo "  format       black + ruff --fix"
+	@echo "  lint         ruff check + ruff format --check"
+	@echo "  format       ruff format + ruff --fix"
 	@echo "  type-check   mypy + pyright"
 	@echo "  clean        remove build artefacts"
 	@echo "  build        build sdist + wheel"
@@ -28,10 +28,10 @@ test-cov:
 
 lint:
 	ruff check eventforge/ tests/ examples/
-	black --check eventforge/ tests/ examples/
+	ruff format --check eventforge/ tests/ examples/
 
 format:
-	black eventforge/ tests/ examples/
+	ruff format eventforge/ tests/ examples/
 	ruff check --fix eventforge/ tests/ examples/
 
 type-check:

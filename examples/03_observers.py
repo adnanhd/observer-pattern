@@ -1,122 +1,99 @@
-"""Observers - profiling and monitoring task execution.
+"""Observers -- profiling and monitoring task execution.
 
-Demonstrates:
-- TimingMeter, MetricsMeter, LoggingReporter
-- MemoryMeter, CPUMeter
-- Custom observers
-- @observe decorator
+Meters attach to a task via ``@task(on_execute=[...])`` and accumulate a
+running aggregate exposed as ``.stats == {val, avg, sum, count}``. A
+``Reporter`` reacts to every Meter's ``"measurement"`` emission via
+``@observe(MeterCls, "measurement")``.
+
+Demonstrates: TimingMeter, MetricsMeter, MemoryMeter, a custom Meter, and a
+Reporter.
 """
 
 import time
+from typing import Any
 
 from eventforge import (
     MemoryMeter,
+    Meter,
     MetricsMeter,
-    Observer,
+    Reporter,
     TimingMeter,
     observe,
+    task,
 )
 
 
-def main():
-    # Timing observer
+def main() -> None:
+    # --- TimingMeter: execution time per call -----------------------------
     print("=== TimingMeter ===")
-
     timing = TimingMeter(threshold=0.1)
 
-    @observe(timing)
-    def slow_task():
+    @task(on_execute=[timing])
+    def slow_task() -> str:
         time.sleep(0.15)
         return "done"
 
-    @observe(timing)
-    def fast_task():
-        return "quick"
-
     slow_task()
-    fast_task()
-    fast_task()
+    slow_task()
+    print(f"timing.stats: {timing.stats}")
 
-    print(f"Stats: {timing.stats}")
-    print(f"Timings: {timing.timings}")
-
-    # Metrics observer
+    # --- MetricsMeter: pull a number out of each result -------------------
     print("\n=== MetricsMeter ===")
+    loss = MetricsMeter("loss", extract=lambda ctx: ctx.result["loss"])
 
-    metrics = MetricsMeter()
+    @task(on_execute=[loss])
+    def train_step(x: float) -> dict[str, float]:
+        return {"loss": x}
 
-    @observe(metrics)
-    def maybe_fail(should_fail: bool):
-        if should_fail:
-            raise ValueError("failed")
-        return "ok"
+    train_step(0.5)
+    train_step(0.3)
+    print(f"loss.stats: {loss.stats}")
 
-    maybe_fail(False)
-    maybe_fail(False)
-    try:
-        maybe_fail(True)
-    except ValueError:
-        pass
-
-    print(f"Stats: {metrics.stats}")
-
-    # Multiple observers
-    print("\n=== Multiple Observers ===")
-
-    timing2 = TimingMeter()
-    metrics2 = MetricsMeter()
-
-    @observe(timing2, metrics2)
-    def multi_observed():
-        time.sleep(0.05)
-        return 42
-
-    for _ in range(3):
-        multi_observed()
-
-    print(f"Timing: {timing2.stats}")
-    print(f"Metrics: {metrics2.stats}")
-
-    # Memory observer
+    # --- MemoryMeter ------------------------------------------------------
     print("\n=== MemoryMeter ===")
-
     memory = MemoryMeter()
 
-    @observe(memory)
-    def allocate_memory():
-        return [i for i in range(100000)]
+    @task(on_execute=[memory])
+    def allocate() -> list[int]:
+        return list(range(100_000))
 
-    allocate_memory()
-    print(f"Memory stats: {memory.stats}")
+    allocate()
+    print(f"memory.stats: {memory.stats}")
 
-    # Custom observer
-    print("\n=== Custom Observer ===")
+    # --- Custom Meter: override measure() ---------------------------------
+    print("\n=== Custom Meter ===")
 
-    class CountingObserver(Observer):
-        def __init__(self):
-            self.call_count = 0
-            self.total_time = 0.0
+    class RowCountMeter(Meter):
+        def measure(self, ctx: Any) -> float:
+            return float(len(ctx.result))
 
-        def on_start(self, ctx):
-            self.call_count += 1
+    rows = RowCountMeter("rows")
 
-        def on_end(self, ctx):
-            self.total_time += ctx.execution_time
+    @task(on_execute=[rows])
+    def load_rows(n: int) -> list[int]:
+        return list(range(n))
 
-        def on_error(self, ctx):
-            print(f"Error in {ctx.func_name}: {ctx.error}")
+    load_rows(10)
+    load_rows(20)
+    print(f"rows.stats: {rows.stats}")
 
-    counter = CountingObserver()
+    # --- Reporter: react to every TimingMeter's "measurement" emission ----
+    print("\n=== Reporter ===")
 
-    @observe(counter)
-    def counted_task(x):
-        time.sleep(0.01)
-        return x * 2
+    class PrintReporter(Reporter):
+        @observe(TimingMeter, "measurement")
+        def on_timing(self, meter: Any, val: float, ctx: Any) -> None:
+            print(f"  [report] {meter.name} measured {val:.4f}s")
 
-    for i in range(5):
-        counted_task(i)
+    PrintReporter()  # auto-subscribes process-wide to TimingMeter emissions
 
-    print(f"Calls: {counter.call_count}, Total time: {counter.total_time:.3f}s")
+    reported = TimingMeter(name="reported")
+
+    @task(on_execute=[reported])
+    def quick() -> int:
+        return 42
+
+    quick()
 
 
 if __name__ == "__main__":

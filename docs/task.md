@@ -317,9 +317,8 @@ result = client.call("predict", 2)        # 4, with the server's observers firin
 ```
 
 Because `predict` is a `@task`, its observers fire on the server around each
-real execution. See [Observability of RPC Calls](rpc.md#observability-of-rpc-calls)
-for measuring round-trip latency on the client side, plus the distributed
-worker pool in [Remote Queue](remote.md) / `examples/07_distributed_workers.py`.
+real execution. See the distributed worker pool in
+[Remote Queue](remote.md) / `examples/07_distributed_workers.py`.
 
 ## Examples
 

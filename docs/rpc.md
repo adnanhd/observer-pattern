@@ -245,46 +245,6 @@ python -m eventforge.worker --import handlers --service compute --port 9090
 # handlers.py:  HANDLERS = {"heavy_computation": heavy_computation}
 ```
 
-## Observability of RPC Calls
-
-RPC itself has no built-in observability -- it just ships a request and
-returns a result. You add observability with [`@task`](task.md) on whichever
-side you care about:
-
-- **Server side (measure real execution):** register a `@task`-decorated
-  handler. Its observers fire on the server, around each real call, so you
-  measure the actual work.
-
-  ```python
-  from eventforge import task, RPCServer, TimingMeter
-
-  server_timing = TimingMeter()
-
-  @task(on_execute=[server_timing])
-  def heavy_computation(n):
-      return sum(i ** 2 for i in range(n))
-
-  server.add_method("heavy_computation", heavy_computation)
-  # server_timing.stats reflects on-server execution time.
-  ```
-
-- **Client side (measure round-trip):** wrap the `client.call(...)` in a
-  `@task`. Its observers measure the full request-reply latency, including
-  network and queueing.
-
-  ```python
-  from eventforge import task, TimingMeter
-
-  rtt_timing = TimingMeter()
-
-  @task(on_execute=[rtt_timing])
-  def call_heavy(n):
-      return client.call("heavy_computation", n)   # plain RPC call by name
-
-  call_heavy(100000)
-  # rtt_timing.stats reflects client-observed round-trip time.
-  ```
-
 ## API Reference
 
 ### RPCServer
