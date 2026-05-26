@@ -1,272 +1,155 @@
-"""Remote message queue subscription and bridging."""
+"""Multi-node switchboard over MessageQueue + TCP transports.
+
+``RemoteQueue`` is a node-addressing layer on top of :class:`MessageQueue`.
+It owns one outbound TCP client link per peer and routes ``send`` /
+``broadcast`` to them; it receives via an optional ``local`` MessageQueue
+(typically backed by a ``TCPServerTransport``) that peers publish into.
+
+The model is **push-only**, matching an in-process task runner's remote
+story -- a coordinator sends work out, workers send results back:
+
+  - ``send(node, topic, payload)``      push to ONE peer
+  - ``broadcast(topic, payload)``       push to ALL peers
+  - ``subscribe(topic, handler)``       receive (peers publish to us)
+
+There is deliberately no "subscribe into a peer's private topic" (pull):
+that direction is request-reply -- use :class:`eventforge.RPCClient` -- or
+just have the peer publish to you.
+"""
+
+from __future__ import annotations
 
 import threading
-from collections.abc import Callable
-from typing import Any, cast
-from uuid import uuid4
+from typing import Any
 
-from eventforge.queue import MessageQueue
-from eventforge.rpc import RPCClient, RPCServer
-from eventforge.types import Message
-
-
-class RemoteSubscription:
-    """Represents a remote subscription to a topic."""
-
-    def __init__(
-        self,
-        subscription_id: str,
-        topic: str,
-        remote_service: str,
-        handler: Callable[[Message], Any],
-    ):
-        self.subscription_id = subscription_id
-        self.topic = topic
-        self.remote_service = remote_service
-        self.handler = handler
+from eventforge.queue import Handler, MessageQueue
+from eventforge.transports.tcp import TCPClientTransport
 
 
 class RemoteQueue:
-    """Message queue with remote subscription support.
+    """Switchboard routing messages to N peer nodes over owned TCP links.
 
-    Bridges local and remote message queues, allowing:
-    - Subscribe to topics on remote services
-    - Publish messages that reach remote subscribers
-    - Forward messages between local and remote queues
+    Args:
+        node_id: identity of this node.
+        local: optional MessageQueue this node receives on, e.g.
+            ``MessageQueue(TCPServerTransport(host="0.0.0.0", port=9001))``.
+            Required for :meth:`subscribe` / :meth:`on`; ``send`` /
+            ``broadcast`` work without it.
 
-    Example:
-        # Local node
-        local_queue = MessageQueue()
-        remote = RemoteQueue(local_queue, node_id="node-1")
+    Example::
 
-        # Connect to remote node
-        remote.connect("node-2", remote_queue_instance)
+        local = MessageQueue(TCPServerTransport(host="0.0.0.0", port=9001))
+        rq = RemoteQueue("node-1", local=local)
+        rq.connect("node-2", host="10.0.0.2", port=9002)
 
-        # Subscribe to remote topic
-        @remote.subscribe_remote("node-2", "events.user")
-        def handle_user_event(msg):
-            print(f"Received from node-2: {msg.payload}")
+        @rq.on("results")                    # receive: peers publish to us
+        def on_result(msg):
+            print(msg.payload)
 
-        # Publish to remote
-        remote.publish_remote("node-2", "events.order", {"id": 123})
+        rq.send("node-2", "work", {"x": 1})  # push to one peer
+        rq.broadcast("shutdown", {})         # push to all peers
     """
 
-    def __init__(
-        self,
-        queue: MessageQueue,
-        node_id: str | None = None,
-    ):
-        self._queue = queue
-        self._node_id = node_id or str(uuid4())[:8]
-        self._remote_connections: dict[str, MessageQueue] = {}
-        self._rpc_servers: dict[str, RPCServer] = {}
-        self._rpc_clients: dict[str, RPCClient] = {}
-        self._remote_subscriptions: dict[str, RemoteSubscription] = {}
+    def __init__(self, node_id: str, *, local: MessageQueue | None = None) -> None:
+        self._node_id = node_id
+        self._local = local
+        self._peers: dict[str, MessageQueue] = {}
+        self._transports: dict[str, TCPClientTransport] = {}
         self._lock = threading.RLock()
-
-        # Setup local RPC server for remote subscriptions
-        self._setup_rpc_server()
-
-    def _setup_rpc_server(self) -> None:
-        """Setup RPC server for handling remote subscription requests."""
-        self._local_server = RPCServer(
-            self._queue,
-            service_name=f"remote.{self._node_id}",
-        )
-
-        @self._local_server.register(name="subscribe")
-        def handle_subscribe(topic: str, reply_topic: str) -> str:
-            """Handle remote subscription request."""
-            sub_id = str(uuid4())
-
-            def forward_handler(msg: Message) -> None:
-                # Forward message to remote subscriber
-                self._queue.publish(reply_topic, msg.model_dump())
-
-            self._queue.subscribe(topic, forward_handler)
-            return sub_id
-
-        @self._local_server.register(name="publish")
-        def handle_publish(topic: str, payload: Any, headers: dict[str, Any]) -> str:
-            """Handle remote publish request."""
-            return self._queue.publish(topic, payload, **headers)
-
-        self._local_server.serve(blocking=False)
 
     @property
     def node_id(self) -> str:
         return self._node_id
 
     @property
-    def local_queue(self) -> MessageQueue:
-        return self._queue
+    def local(self) -> MessageQueue | None:
+        return self._local
 
-    def connect(self, remote_node_id: str, remote_queue: MessageQueue) -> None:
-        """Connect to a remote node's queue.
-
-        Args:
-            remote_node_id: Identifier for the remote node
-            remote_queue: The remote node's MessageQueue instance
-        """
+    @property
+    def peers(self) -> list[str]:
+        """Currently connected peer node ids."""
         with self._lock:
-            self._remote_connections[remote_node_id] = remote_queue
-            self._rpc_clients[remote_node_id] = RPCClient(
-                remote_queue,
-                service_name=f"remote.{remote_node_id}",
-                timeout=30.0,
-            )
+            return list(self._peers)
 
-    def disconnect(self, remote_node_id: str) -> bool:
-        """Disconnect from a remote node."""
+    # -- peer links ---------------------------------------------------------
+
+    def connect(self, node_id: str, host: str, port: int) -> None:
+        """Open and own an outbound TCP link to a peer (replaces any existing)."""
+        transport = TCPClientTransport(host=host, port=port)
+        transport.connect()
         with self._lock:
-            if remote_node_id in self._remote_connections:
-                del self._remote_connections[remote_node_id]
-                del self._rpc_clients[remote_node_id]
-                return True
+            old = self._transports.pop(node_id, None)
+            self._transports[node_id] = transport
+            self._peers[node_id] = MessageQueue(transport=transport)
+        if old is not None:
+            old.close()
+
+    def disconnect(self, node_id: str) -> bool:
+        """Close the link to a peer. Returns True if it existed."""
+        with self._lock:
+            self._peers.pop(node_id, None)
+            transport = self._transports.pop(node_id, None)
+        if transport is None:
             return False
+        transport.close()
+        return True
 
-    def subscribe_remote(
-        self,
-        remote_node_id: str,
-        topic: str,
-    ) -> Callable[[Callable[[Message], Any]], Callable[[Message], Any]]:
-        """Decorator to subscribe to a topic on a remote node.
+    # -- push to peers ------------------------------------------------------
 
-        Args:
-            remote_node_id: The remote node to subscribe to
-            topic: Topic pattern to subscribe to
-
-        Example:
-            @remote.subscribe_remote("node-2", "events.*")
-            def handler(msg):
-                print(msg.payload)
-        """
-
-        def decorator(handler: Callable[[Message], Any]) -> Callable[[Message], Any]:
-            self.add_remote_subscription(remote_node_id, topic, handler)
-            return handler
-
-        return decorator
-
-    def add_remote_subscription(
-        self,
-        remote_node_id: str,
-        topic: str,
-        handler: Callable[[Message], Any],
-    ) -> str:
-        """Subscribe to a topic on a remote node.
-
-        Args:
-            remote_node_id: The remote node to subscribe to
-            topic: Topic pattern to subscribe to
-            handler: Callback for received messages
-
-        Returns:
-            Subscription ID
-        """
+    def send(self, node_id: str, topic: str, payload: Any, **headers: Any) -> str:
+        """Push a message to one peer. Returns the message id."""
         with self._lock:
-            client = self._rpc_clients.get(remote_node_id)
-            if not client:
-                raise ValueError(f"Not connected to remote node: {remote_node_id}")
-
-            # Create a reply topic for forwarded messages
-            reply_topic = f"_remote_sub.{self._node_id}.{uuid4()}"
-
-            # Subscribe locally to receive forwarded messages
-            def local_handler(msg: Message) -> None:
-                try:
-                    # Reconstruct the original message
-                    if isinstance(msg.payload, dict) and "topic" in msg.payload:
-                        original = Message.model_validate(msg.payload)
-                        handler(original)
-                    else:
-                        handler(msg)
-                except Exception:
-                    pass
-
-            self._queue.subscribe(reply_topic, local_handler)
-
-            # Request remote subscription; the remote "subscribe" handler
-            # returns a subscription-id string.
-            sub_id = cast(str, client.call("subscribe", topic, reply_topic))
-
-            subscription = RemoteSubscription(
-                subscription_id=sub_id,
-                topic=topic,
-                remote_service=remote_node_id,
-                handler=handler,
-            )
-            self._remote_subscriptions[sub_id] = subscription
-
-            return sub_id
-
-    def publish_remote(
-        self,
-        remote_node_id: str,
-        topic: str,
-        payload: Any,
-        **headers: Any,
-    ) -> str:
-        """Publish a message to a remote node.
-
-        Args:
-            remote_node_id: The remote node to publish to
-            topic: Topic to publish to
-            payload: Message payload
-            **headers: Additional headers
-
-        Returns:
-            Message ID from remote
-        """
-        with self._lock:
-            client = self._rpc_clients.get(remote_node_id)
-            if not client:
-                raise ValueError(f"Not connected to remote node: {remote_node_id}")
-
-            # The remote "publish" handler returns a message-id string.
-            return cast(str, client.call("publish", topic, payload, headers))
-
-    def publish(self, topic: str, payload: Any, **headers: Any) -> str:
-        """Publish to local queue."""
-        return self._queue.publish(topic, payload, **headers)
-
-    def subscribe(self, topic: str, handler: Callable[[Message], Any]) -> str:
-        """Subscribe to local queue."""
-        return self._queue.subscribe(topic, handler)
-
-    def on(
-        self, topic: str
-    ) -> Callable[[Callable[[Message], None]], Callable[[Message], None]]:
-        """Decorator for local subscription."""
-        return self._queue.on(topic)
+            peer = self._peers.get(node_id)
+        if peer is None:
+            raise KeyError(f"not connected to node {node_id!r}")
+        return peer.publish(topic, payload, **headers)
 
     def broadcast(self, topic: str, payload: Any, **headers: Any) -> dict[str, str]:
-        """Broadcast message to all connected nodes.
-
-        Returns:
-            Dict mapping node_id to message_id
-        """
-        results = {}
-
-        # Publish locally
-        results[self._node_id] = self._queue.publish(topic, payload, **headers)
-
-        # Publish to all remotes
+        """Push a message to every connected peer. Returns ``{node_id: msg_id}``."""
         with self._lock:
-            for node_id, client in self._rpc_clients.items():
-                try:
-                    results[node_id] = client.call("publish", topic, payload, headers)
-                except Exception:
-                    results[node_id] = ""
+            peers = dict(self._peers)
+        return {
+            node_id: peer.publish(topic, payload, **headers)
+            for node_id, peer in peers.items()
+        }
 
-        return results
+    # -- local receive ------------------------------------------------------
+
+    def subscribe(self, topic: str, handler: Handler) -> str:
+        """Subscribe a handler on the local queue (how peers reach us)."""
+        return self._require_local().subscribe(topic, handler)
+
+    def on(self, topic: str) -> Any:
+        """Decorator form of :meth:`subscribe`; returns the handler unchanged."""
+
+        def deco(handler: Handler) -> Handler:
+            self.subscribe(topic, handler)
+            return handler
+
+        return deco
+
+    # -- lifecycle ----------------------------------------------------------
 
     def close(self) -> None:
-        """Close all connections."""
-        self._local_server.stop()
-        self._queue.close()
+        """Close every peer link and the local queue."""
+        with self._lock:
+            transports = list(self._transports.values())
+            self._transports.clear()
+            self._peers.clear()
+        for transport in transports:
+            transport.close()
+        if self._local is not None:
+            self._local.close()
 
-    def __enter__(self) -> "RemoteQueue":
+    def _require_local(self) -> MessageQueue:
+        if self._local is None:
+            raise RuntimeError(
+                "this RemoteQueue was created without a local queue; "
+                "pass RemoteQueue(node_id, local=MessageQueue(...)) to receive."
+            )
+        return self._local
+
+    def __enter__(self) -> RemoteQueue:
         return self
 
     def __exit__(self, *args: Any) -> None:

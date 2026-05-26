@@ -189,35 +189,43 @@ server.stop()  # serve() takes a stop_event for graceful shutdown
 
 ### Remote Queue
 
-Bridge message queues across nodes with remote subscriptions:
+`RemoteQueue` is a node-addressing switchboard: it owns one outbound TCP
+link per peer and routes `send`/`broadcast` to them, while you receive on a
+`local` queue that peers push into. Push-only -- a node sends to a named
+peer; receivers just `subscribe` locally (no reaching into a peer's topics).
+
+A node needs a `local` queue **only if it receives**. A pure sender doesn't.
 
 ```python
 from eventforge import MessageQueue, RemoteQueue
+from eventforge.transports.tcp import TCPServerTransport
 
-# Node 1
-queue1 = MessageQueue()
-remote1 = RemoteQueue(queue1, node_id="node-1")
+# --- Worker: RECEIVES, so it listens on a port and subscribes locally. ---
+# (TCPServerTransport must be .start()ed before use.)
+worker_srv = TCPServerTransport(host="0.0.0.0", port=9001)
+worker_srv.start()
+worker = RemoteQueue("worker-1", local=MessageQueue(transport=worker_srv))
 
-# Node 2
-queue2 = MessageQueue()
-remote2 = RemoteQueue(queue2, node_id="node-2")
+@worker.on("work")
+def run(msg):
+    print(f"worker got: {msg.payload}")
 
-# Connect nodes
-remote1.connect("node-2", queue2)
-remote2.connect("node-1", queue1)
+# --- Coordinator: only SENDS, so it needs no local queue at all. ---
+coord = RemoteQueue("coordinator")
+coord.connect("worker-1", host="127.0.0.1", port=9001)  # own a TCP link by address
 
-# Subscribe to remote topic
-@remote1.subscribe_remote("node-2", "events.order")
-def handle_order(msg):
-    print(f"Node-1 received: {msg.payload}")
+coord.send("worker-1", "work", {"task": 42})  # push to one worker
+# -> worker got: {'task': 42}
 
-# Publish from node-2 to node-1
-remote2.publish("events.order", {"id": 123, "status": "created"})
-# Output: Node-1 received: {'id': 123, 'status': 'created'}
-
-# Broadcast to all nodes
-remote1.broadcast("events.system", {"action": "shutdown"})
+coord.broadcast("work", {"task": 99})          # push to ALL connected workers
 ```
+
+The coordinator has no `local` because nothing pushes *to* it; the worker has
+one because it must receive. To make it bidirectional, give the coordinator a
+`local` too and have the worker `send` results back.
+
+> To subscribe to a *remote* node's private topic (pull) you'd use RPC, not
+> `RemoteQueue` -- see [RPC](#rpc). `RemoteQueue` is push-only by design.
 
 ### Async Support
 
@@ -368,15 +376,16 @@ result = client.method_name(*args)  # Dynamic access
 ### RemoteQueue
 
 ```python
-remote = RemoteQueue(queue, node_id="node-1")
+remote = RemoteQueue("node-1", local=queue)     # local = MessageQueue you receive on
 
-remote.connect(remote_node_id, remote_queue)    # Connect to remote
-remote.disconnect(remote_node_id)               # Disconnect
-remote.subscribe_remote(node_id, topic)(handler)  # Subscribe decorator
-remote.add_remote_subscription(node_id, topic, handler)  # Subscribe
-remote.publish_remote(node_id, topic, payload)  # Publish to remote
-remote.broadcast(topic, payload)                # Broadcast to all nodes
-remote.close()                                  # Cleanup connections
+remote.connect(node_id, host, port)             # Open + own a TCP link to a peer
+remote.disconnect(node_id)                       # Close that link (-> bool)
+remote.send(node_id, topic, payload)            # Push to ONE peer (-> msg_id)
+remote.broadcast(topic, payload)                # Push to ALL peers (-> {node: msg_id})
+remote.subscribe(topic, handler)                # Receive locally (-> sub_id)
+remote.on(topic)                                # Decorator form of subscribe
+remote.peers                                    # Connected peer node ids
+remote.close()                                  # Close every link + the local queue
 ```
 
 ## License
