@@ -41,13 +41,19 @@ the other is *where the other side lives*.
 |                  | local                  | remote        |
 |------------------|------------------------|---------------|
 | **pub-sub**      | `MessageQueue`         | `RemoteQueue` |
-| **request-reply**| `Executor`             | RPC (`RPCServer` / `RPCClient`) |
+| **request-reply**| `LocalProcedureCaller` | RPC (`RPCServer` / `RPCClient`) |
+
+The request-reply row is unified by one structural protocol, `Caller`:
+`LocalProcedureCaller` runs a callable in-process, `RPCClient` dispatches it
+to a remote worker by name, and both expose the same `.call(target, *args)`.
+That is the analogy `LocalProcedureCaller : RPCClient :: Local : Remote
+Procedure Call`.
 
 The `Transport` (Memory or TCP) is *where* local-vs-remote actually lives:
 the same `MessageQueue` API runs in-process on `MemoryTransport` or across
 the network on a TCP transport. `@task` is **not** a fifth box -- it is a
-facade that composes a runner (an `Executor`) + a `MessageQueue` +
-`Observers` into one decorated callable.
+facade that composes a `Caller` + a `MessageQueue` + `Observers` into one
+decorated callable.
 
 ## Transport Layer
 
@@ -175,44 +181,65 @@ design.
 
 Request-reply: one call, one returned value.
 
-### Executor (local)
+### LocalProcedureCaller (local)
 
-`Executor` runs a callable and hands back a `TaskResult`. Three modes:
-`SEQUENTIAL` (run inline, the default), `THREAD` (thread pool, I/O-bound),
-`PROCESS` (process pool, CPU-bound). Submit a job and fetch its result by
-id, or `map` over an iterable:
+`LocalProcedureCaller` runs a callable in-process and hands back its value.
+(`Executor` is a deprecated alias kept for back-compat -- prefer
+`LocalProcedureCaller`.) Three modes: `SEQUENTIAL` (run inline, the
+default), `THREAD` (thread pool, I/O-bound), `PROCESS` (process pool,
+CPU-bound).
+
+The high-level entry point is `.call(target, *args, **kwargs)`, which
+returns the unwrapped value: in `SEQUENTIAL` mode it runs the callable
+directly; otherwise it submits to the pool and waits for the result's value.
 
 ```python
-from eventforge import Executor, ExecutionMode
+from eventforge import LocalProcedureCaller, ExecutionMode
 
 def heavy_task(n):
     return sum(range(n))
 
-# Thread-based execution
-with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
-    task_id = executor.submit(heavy_task, 1_000_000)
-    result = executor.result(task_id)
+# One call, one value -- this is the Caller surface.
+caller = LocalProcedureCaller(mode=ExecutionMode.THREAD, max_workers=4)
+print(caller.call(heavy_task, 1_000_000))   # 499999500000
+```
+
+For finer control, `submit` / `result` / `map` expose the `TaskResult`
+(`.value` / `.error` / `.status` / `.execution_time`):
+
+```python
+from eventforge import LocalProcedureCaller, ExecutionMode
+
+def heavy_task(n):
+    return sum(range(n))
+
+# Submit a job and fetch its TaskResult by id.
+with LocalProcedureCaller(mode=ExecutionMode.THREAD, max_workers=4) as caller:
+    task_id = caller.submit(heavy_task, 1_000_000)
+    result = caller.result(task_id)
     print(result.value)
 
-# Process-based execution for CPU-bound work
-with Executor(mode=ExecutionMode.PROCESS, max_workers=4) as executor:
-    results = executor.map(heavy_task, [100_000, 200_000, 300_000])
-    for r in results:
+# Process pool for CPU-bound work, mapped over an iterable.
+with LocalProcedureCaller(mode=ExecutionMode.PROCESS, max_workers=4) as caller:
+    for r in caller.map(heavy_task, [100_000, 200_000, 300_000]):
         print(r.value)
 ```
 
 `submit` returns a `task_id`; `result(task_id)` blocks for the
-`TaskResult` (`.value` / `.error` / `.status` / `.execution_time`). In
-`SEQUENTIAL` mode the work runs inline at submit time. Async variants
-(`submit_async`, `result_async`, `map_async`) mirror the sync API.
+`TaskResult`. In `SEQUENTIAL` mode the work runs inline at submit time.
+Async variants (`submit_async`, `result_async`, `map_async`) mirror the
+sync API.
 
 ### RPC (remote)
 
 RPC is request-reply across a queue: `RPCServer` registers methods,
-`RPCClient.call(name, *args)` invokes them and returns the result. Run it
-over a TCP-backed `MessageQueue` to reach another process or machine -- the
-client API is identical whether the server is in-process or across the
-network.
+`RPCClient.call(method, *args)` invokes them and returns the result.
+`method` may be a name string *or* a callable (in which case its
+`__name__` is used as the remote method name), so an `RPCClient` is the
+remote `Caller` -- structurally interchangeable with a
+`LocalProcedureCaller`. Run it over a TCP-backed `MessageQueue` to reach
+another process or machine; the client API is identical whether the server
+is in-process or across the network.
 
 ```python
 from eventforge import MessageQueue, RPCServer, RPCClient
@@ -243,36 +270,51 @@ server.stop()
 `RoundRobinRPCClient([client1, client2, ...])` spreads `call`s across a
 pool of clients (each typically pointed at a different worker); `with_retry`
 wraps a client with exponential-backoff retries. Both keep the same
-`call(name, *args)` surface.
+`call(method, *args)` surface.
 
-`Executor` is local request-reply; `RPCClient` is the remote counterpart --
-same call/return shape, different distance.
+### The Caller protocol (the unifier)
+
+`Caller` is a `@runtime_checkable` `Protocol` with a single method,
+`call(target, *args, **kwargs) -> value`. `LocalProcedureCaller` and
+`RPCClient` both satisfy it structurally, so request-reply is one shape at
+two distances:
+
+```
+LocalProcedureCaller : RPCClient :: Local : Remote Procedure Call
+```
+
+Anything that accepts a `Caller` -- notably `@task(caller=...)` -- can target
+either transparently: run the work in-process or dispatch it to a remote
+worker by swapping the `Caller`, with no other change.
 
 ## Composing with @task
 
-`@task` is **not** a layer -- it is a facade. It composes a runner (an
-`Executor`), an optional `MessageQueue`, and `Observers` into a single
-callable that you can invoke directly *or* trigger by publishing to its
-topic. Both paths run the identical lifecycle.
+`@task` is **not** a layer -- it is a facade. It composes a `Caller`, an
+optional `MessageQueue`, and `Observers` into a single callable that you can
+invoke directly *or* trigger by publishing to its topic. The `caller=`
+parameter (a `Caller`) decides *where* the work runs; both invocation paths
+run the identical lifecycle.
 
 ```python
-from eventforge import task, MessageQueue, Executor, ExecutionMode, TimingMeter
+from eventforge import (
+    task, MessageQueue, LocalProcedureCaller, ExecutionMode, TimingMeter
+)
 
 queue = MessageQueue()
-executor = Executor(mode=ExecutionMode.THREAD)
+caller = LocalProcedureCaller(mode=ExecutionMode.THREAD)
 timing = TimingMeter()
 
 @task(
     queue=queue,             # pub-sub wiring (subscribe topic + publish result)
     topic="process.data",
-    executor=executor,       # the runner: SEQUENTIAL / THREAD / PROCESS
+    caller=caller,           # the Caller: local LocalProcedureCaller here
     on_execute=[timing],     # observers (cross-cutting)
     on_success=lambda ctx: print(f"Done: {ctx.result}"),
 )
 def process_data(data):
     return data.upper()
 
-# Direct call -- runs locally through the Executor, returns the result.
+# Direct call -- runs locally through the LocalProcedureCaller, returns the result.
 result = process_data("hello")   # "HELLO"
 
 # Queue trigger -- same execution path, same observers.
@@ -281,26 +323,37 @@ queue.publish("process.data", "world")
 print(timing.stats)              # {'count': 2, 'avg': ..., ...}
 ```
 
-Running the same work remotely is a wiring change, not a rewrite: keep the
-function as the reference implementation, expose it on a worker via
-`RPCServer` (or `python -m eventforge.worker`, see [Deployment](#deployment)),
-and dispatch from the local side with an `RPCClient`:
+(`executor=` is accepted as a deprecated alias for `caller=`; prefer
+`caller=`.)
+
+Running the same work remotely is a one-parameter flip on the *same*
+function: keep the body as the reference implementation, expose it on a
+worker via `RPCServer` (or `python -m eventforge.worker`, see
+[Deployment](#deployment)), and point `caller=` at an `RPCClient`. Because
+`RPCClient` is also a `Caller`, `@task` dispatches the function to the remote
+worker by its `__name__` instead of running the body locally:
 
 ```python
-from eventforge import MessageQueue, RPCClient
+from eventforge import task, MessageQueue, RPCClient
 from eventforge.transports.tcp import TCPClientTransport
 
 transport = TCPClientTransport(host="gpu-host", port=9090)
 transport.connect()
-client = RPCClient(MessageQueue(transport=transport), service_name="data")
+remote = RPCClient(MessageQueue(transport=transport), service_name="data")
 
-# Dispatch the SAME logical operation to a remote worker by name.
-result = client.call("process_data", "world")
+# Same function, remote Caller -> dispatched to a remote/containerized worker.
+@task(caller=remote)
+def process_data(data):
+    return data.upper()        # reference impl; not run locally
+
+result = process_data("world")  # runs on the worker, by name "process_data"
 ```
 
-Locally the `@task` body runs through its `Executor`; remotely the worker
-runs the registered function and returns the value. `@task` simply bundles
-the local runner + queue + observers so you do not wire them by hand.
+So `@task(caller=LocalProcedureCaller())` runs the body in-process while
+`@task(caller=RPCClient(...))` dispatches the identical function to a remote
+worker by name -- `LocalProcedureCaller : RPCClient :: Local : Remote
+Procedure Call`. `@task` simply bundles the chosen `Caller` + queue +
+observers so you do not wire them by hand.
 
 ## Observers
 
@@ -426,16 +479,27 @@ remote.peers                                      # connected peer node ids
 remote.close()
 ```
 
-### LocalProcedureCaller (alias: Executor)
+### Caller (protocol)
 
 ```python
-executor = Executor(mode=ExecutionMode.SEQUENTIAL, max_workers=4)
+# Structural protocol unifying local and remote request-reply.
+# LocalProcedureCaller and RPCClient both satisfy it.
+class Caller(Protocol):
+    def call(self, target, *args, **kwargs): ...   # -> value
+```
 
-task_id = executor.submit(func, *args, **kwargs)  # -> task_id
-result = executor.result(task_id, timeout=None)   # -> TaskResult
-results = executor.map(func, items, timeout=None) # -> list[TaskResult]
-executor.start(); executor.stop(wait=True)        # also a context manager
+### LocalProcedureCaller (deprecated alias: Executor)
+
+```python
+caller = LocalProcedureCaller(mode=ExecutionMode.SEQUENTIAL, max_workers=4)
+
+value = caller.call(func, *args, **kwargs)        # Caller surface -> value
+task_id = caller.submit(func, *args, **kwargs)    # -> task_id
+result = caller.result(task_id, timeout=None)     # -> TaskResult
+results = caller.map(func, items, timeout=None)   # -> list[TaskResult]
+caller.start(); caller.stop(wait=True)            # also a context manager
 # ExecutionMode: SEQUENTIAL / THREAD / PROCESS
+# Executor is a deprecated alias for LocalProcedureCaller.
 ```
 
 ### RPC
@@ -448,9 +512,10 @@ server.add_method(name, func)
 server.serve(blocking=True)                       # blocking=False returns immediately
 server.stop()
 
-# Client
+# Client (also a Caller: satisfies the Caller protocol)
 client = RPCClient(queue, service_name="rpc", timeout=30.0)
-client.call(method, *args, timeout=None, **kwargs)   # -> result
+client.call(method, *args, timeout=None, **kwargs)   # method: name str OR callable
+                                                     #   (callable -> uses __name__) -> result
 client.method_name(*args)                            # dynamic access
 RoundRobinRPCClient([client1, client2, ...])         # client-side load balance
 with_retry(client, max_retries=3, ...)               # backoff wrapper
@@ -462,7 +527,9 @@ with_retry(client, max_retries=3, ...)               # backoff wrapper
 @task(
     queue=None,           # MessageQueue for pub-sub integration
     topic=None,           # topic name (defaults to function name)
-    executor=None,        # Executor (defaults to a SEQUENTIAL Executor)
+    caller=None,          # Caller: LocalProcedureCaller (local, default) or
+                          #   RPCClient (remote dispatch by func.__name__)
+    executor=None,        # deprecated alias for caller
     on_execute=None,      # list of observers
     on_success=None,      # Callable[[TaskContext], None]
     on_failure=None,      # Callable[[TaskContext], None]

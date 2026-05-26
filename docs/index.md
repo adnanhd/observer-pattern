@@ -11,16 +11,18 @@ request-reply) by *where the other side lives* (local vs remote):
 |                  | local          | remote        |
 |------------------|----------------|---------------|
 | **pub-sub**      | `MessageQueue` | `RemoteQueue` |
-| **request-reply**| `Executor`     | RPC (`RPCServer` / `RPCClient`) |
+| **request-reply**| `LocalProcedureCaller` | RPC (`RPCServer` / `RPCClient`) |
 
-The `Transport` (Memory or TCP) is *where* local-vs-remote lives. `@task` is
-not a fifth box -- it is a facade that composes an `Executor` + a
+The request-reply row is unified by the `Caller` protocol:
+`LocalProcedureCaller : RPCClient :: Local : Remote Procedure Call`. The
+`Transport` (Memory or TCP) is *where* local-vs-remote lives. `@task` is
+not a fifth box -- it is a facade that composes a `Caller` + a
 `MessageQueue` + `Observers`.
 
 - **Message Queue**: local pub-sub messaging with Pydantic validation
 - **Remote Queue**: push-only switchboard for cross-node pub-sub
-- **Executor**: local request-reply -- run work in sequential, thread, or process mode
-- **RPC**: remote request-reply over a message queue
+- **LocalProcedureCaller**: local request-reply -- run work in sequential, thread, or process mode (`Executor` is a deprecated alias)
+- **RPC**: remote request-reply over a message queue (`RPCClient` is the remote `Caller`)
 - **Task Decorator**: facade composing a runner + queue + observers
 - **Observers**: profile and monitor task execution
 
@@ -36,7 +38,7 @@ is stdlib.
 ## Quick Start
 
 ```python
-from eventforge import task, MessageQueue, Executor, ExecutionMode, TimingMeter
+from eventforge import task, MessageQueue, LocalProcedureCaller, ExecutionMode, TimingMeter
 
 queue = MessageQueue()
 timing = TimingMeter()
@@ -61,8 +63,8 @@ queue.publish("process.data", "world")
 print(timing.stats)  # {'count': 2, 'avg': 0.001, ...}
 
 # Parallel execution
-with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
-    results = executor.map(lambda x: x ** 2, [1, 2, 3, 4, 5])
+with LocalProcedureCaller(mode=ExecutionMode.THREAD, max_workers=4) as caller:
+    results = caller.map(lambda x: x ** 2, [1, 2, 3, 4, 5])
 ```
 
 ## Execution Flow Diagrams
@@ -210,7 +212,7 @@ push-only: to pull a value from a peer, use RPC. See
 
 - [Task](task.md) - Unified task decorator with lifecycle support
 - [Message Queue](queue.md) - Pub-sub messaging
-- [Executor](executor.md) - Parallel task execution
+- [LocalProcedureCaller](executor.md) - Parallel task execution (local Caller)
 - [RPC](rpc.md) - Remote procedure calls
 - [Remote Queue](remote.md) - Distributed messaging
 - [Observers](observers.md) - Execution profiling
@@ -227,7 +229,8 @@ eventforge/
     tcp.py          # JSON-over-TCP server/client transports
   queue.py          # MessageQueue with pub-sub
   remote.py         # RemoteQueue push-only switchboard
-  executor.py       # Unified Executor (local request-reply)
+  executor.py       # LocalProcedureCaller (local request-reply)
+  caller.py         # Caller protocol (unifies local + remote)
   rpc.py            # RPCServer and RPCClient (remote request-reply)
   task.py           # @task facade + TaskRunner
   observers.py      # Observable / Eventful / Dispatcher + Meters

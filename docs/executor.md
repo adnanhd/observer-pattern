@@ -1,18 +1,24 @@
-# Executor
+# LocalProcedureCaller
 
-Unified task executor with sequential, thread, and process modes.
+Unified local procedure caller with sequential, thread, and process modes.
 
-`Executor` is the **local request-reply** layer: you submit a callable and
-get a value back. Its remote counterpart is [RPC](rpc.md) (`RPCClient.call`
-dispatches the same call/return to a worker process or machine). The
-[`@task`](task.md) decorator composes an `Executor` (via its `executor=`
-parameter) with a queue and observers.
+`LocalProcedureCaller` is the **local request-reply** layer: you hand it a
+callable and get a value back. Its remote counterpart is [RPC](rpc.md)
+(`RPCClient.call` dispatches the same call/return to a worker process or
+machine). Both satisfy the [`Caller` protocol](#the-caller-protocol), so the
+[`@task`](task.md) decorator can target either via its `caller=` parameter.
+
+> `Executor` is a **deprecated alias** for `LocalProcedureCaller` kept for
+> back-compat (`Executor = LocalProcedureCaller`). Prefer
+> `LocalProcedureCaller` in new code.
 
 ## Overview
 
-`Executor` provides:
+`LocalProcedureCaller` provides:
+- A single high-level entry point, `call(target, *args, **kwargs) -> value`
+  (the `Caller` surface)
 - Three execution modes: sequential, thread, process
-- Task submission and result retrieval
+- Lower-level task submission and result retrieval
 - Map operations for batch processing
 - Async/await support
 
@@ -20,35 +26,73 @@ parameter) with a queue and observers.
 `PROCESS` submit to a pool and return a `task_id` you later resolve with
 `result(task_id)`.
 
+## The call() entry point
+
+`call(target, *args, **kwargs)` returns the unwrapped value, hiding the
+`submit` / `result` dance. In `SEQUENTIAL` mode it runs `target` directly;
+in `THREAD` / `PROCESS` mode it submits and returns the resulting
+`TaskResult.value`. This is the method that satisfies the `Caller` protocol.
+
+```python
+from eventforge import LocalProcedureCaller, ExecutionMode
+
+def compute(n):
+    return sum(range(n))
+
+caller = LocalProcedureCaller(mode=ExecutionMode.THREAD, max_workers=4)
+print(caller.call(compute, 1_000_000))   # 499999500000
+```
+
+## The Caller protocol
+
+`Caller` is a `@runtime_checkable` `Protocol` with one method,
+`call(target, *args, **kwargs) -> value`. `LocalProcedureCaller` (runs the
+callable in-process) and [`RPCClient`](rpc.md) (dispatches to a remote method
+by name) both satisfy it, so request-reply is one shape at two distances:
+
+```
+LocalProcedureCaller : RPCClient :: Local : Remote Procedure Call
+```
+
+```python
+from eventforge import Caller, LocalProcedureCaller
+
+caller = LocalProcedureCaller()
+isinstance(caller, Caller)   # True (runtime-checkable)
+```
+
+Anything accepting a `Caller` -- notably [`@task(caller=...)`](task.md) --
+can run the work locally or dispatch it remotely by swapping the `Caller`.
+
 ## Execution Modes
 
 ```python
-from eventforge import Executor, ExecutionMode
+from eventforge import LocalProcedureCaller, ExecutionMode
 
 # Sequential (default) - runs in current thread
-executor = Executor(mode=ExecutionMode.SEQUENTIAL)
+caller = LocalProcedureCaller(mode=ExecutionMode.SEQUENTIAL)
 
 # Thread pool - for I/O-bound tasks
-executor = Executor(mode=ExecutionMode.THREAD, max_workers=4)
+caller = LocalProcedureCaller(mode=ExecutionMode.THREAD, max_workers=4)
 
 # Process pool - for CPU-bound tasks
-executor = Executor(mode=ExecutionMode.PROCESS, max_workers=4)
+caller = LocalProcedureCaller(mode=ExecutionMode.PROCESS, max_workers=4)
 ```
 
 ## Basic Usage
 
 ```python
-from eventforge import Executor, ExecutionMode
+from eventforge import LocalProcedureCaller, ExecutionMode
 
 def compute(n):
     return sum(range(n))
 
-with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
+with LocalProcedureCaller(mode=ExecutionMode.THREAD, max_workers=4) as caller:
     # Submit task
-    task_id = executor.submit(compute, 1000000)
-    
+    task_id = caller.submit(compute, 1000000)
+
     # Get result
-    result = executor.result(task_id)
+    result = caller.result(task_id)
     print(result.value)       # 499999500000
     print(result.status)      # TaskStatus.COMPLETED
     print(result.execution_time)
@@ -59,14 +103,14 @@ with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
 Process multiple items in parallel:
 
 ```python
-from eventforge import Executor, ExecutionMode
+from eventforge import LocalProcedureCaller, ExecutionMode
 
 def square(x):
     return x ** 2
 
-with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
-    results = executor.map(square, [1, 2, 3, 4, 5])
-    
+with LocalProcedureCaller(mode=ExecutionMode.THREAD, max_workers=4) as caller:
+    results = caller.map(square, [1, 2, 3, 4, 5])
+
     for r in results:
         print(r.value)  # 1, 4, 9, 16, 25
 ```
@@ -76,7 +120,7 @@ with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
 For CPU-bound tasks, use process mode to bypass the GIL:
 
 ```python
-from eventforge import Executor, ExecutionMode
+from eventforge import LocalProcedureCaller, ExecutionMode
 
 def cpu_intensive(n):
     """CPU-bound computation."""
@@ -86,9 +130,9 @@ def cpu_intensive(n):
     return total
 
 # Functions must be picklable for process mode
-with Executor(mode=ExecutionMode.PROCESS, max_workers=4) as executor:
-    results = executor.map(cpu_intensive, [100000, 200000, 300000])
-    
+with LocalProcedureCaller(mode=ExecutionMode.PROCESS, max_workers=4) as caller:
+    results = caller.map(cpu_intensive, [100000, 200000, 300000])
+
     for r in results:
         print(f"Result: {r.value}, Time: {r.execution_time:.3f}s")
 ```
@@ -97,19 +141,19 @@ with Executor(mode=ExecutionMode.PROCESS, max_workers=4) as executor:
 
 ```python
 import asyncio
-from eventforge import Executor, ExecutionMode
+from eventforge import LocalProcedureCaller, ExecutionMode
 
 async def main():
-    async with Executor(mode=ExecutionMode.THREAD) as executor:
+    async with LocalProcedureCaller(mode=ExecutionMode.THREAD) as caller:
         # Async submit
-        task_id = await executor.submit_async(lambda x: x ** 2, 10)
-        
+        task_id = await caller.submit_async(lambda x: x ** 2, 10)
+
         # Async result
-        result = await executor.result_async(task_id)
+        result = await caller.result_async(task_id)
         print(result.value)  # 100
-        
+
         # Async map
-        results = await executor.map_async(lambda x: x * 2, [1, 2, 3])
+        results = await caller.map_async(lambda x: x * 2, [1, 2, 3])
         for r in results:
             print(r.value)
 
@@ -121,17 +165,17 @@ asyncio.run(main())
 Failed tasks return results with error information:
 
 ```python
-from eventforge import Executor
+from eventforge import LocalProcedureCaller
 
 def failing_task(x):
     if x < 0:
         raise ValueError("Negative not allowed")
     return x * 2
 
-with Executor() as executor:
-    task_id = executor.submit(failing_task, -5)
-    result = executor.result(task_id)
-    
+with LocalProcedureCaller() as caller:
+    task_id = caller.submit(failing_task, -5)
+    result = caller.result(task_id)
+
     print(result.is_failure)   # True
     print(result.error)        # "Negative not allowed"
     print(result.error_type)   # "ValueError"
@@ -140,44 +184,63 @@ with Executor() as executor:
 ## Timeouts
 
 ```python
-from eventforge import Executor
+from eventforge import LocalProcedureCaller
 import time
 
 def slow_task():
     time.sleep(10)
     return "done"
 
-with Executor() as executor:
-    task_id = executor.submit(slow_task)
-    
+with LocalProcedureCaller() as caller:
+    task_id = caller.submit(slow_task)
+
     try:
-        result = executor.result(task_id, timeout=2.0)
+        result = caller.result(task_id, timeout=2.0)
     except TimeoutError:
         print("Task timed out")
 ```
 
 ## API Reference
 
-### Executor
+### Caller
 
 ```python
-class Executor:
+@runtime_checkable
+class Caller(Protocol):
+    """Structural protocol unifying local execution and remote dispatch.
+
+    Both LocalProcedureCaller and RPCClient satisfy it.
+    """
+    def call(self, target: Callable | str, *args, **kwargs) -> Any: ...
+```
+
+### LocalProcedureCaller
+
+```python
+class LocalProcedureCaller:
     def __init__(
         self,
         mode: ExecutionMode = ExecutionMode.SEQUENTIAL,
         max_workers: int = 4,
     ):
-        """Create executor with specified mode and worker count."""
-    
+        """Create a caller with specified mode and worker count."""
+
+    def call(self, target: Callable | str, *args, **kwargs) -> Any:
+        """Run target and return its unwrapped value (the Caller surface).
+
+        SEQUENTIAL mode runs target directly; THREAD / PROCESS submit and
+        return the resulting TaskResult.value. Requires a callable target.
+        """
+
     @property
     def mode(self) -> ExecutionMode:
         """Current execution mode."""
     
     def start(self) -> None:
-        """Start executor pool (called automatically on first submit)."""
+        """Start the pool (called automatically on first submit)."""
     
     def stop(self, wait: bool = True) -> None:
-        """Stop executor pool."""
+        """Stop the pool."""
     
     def submit(
         self,
@@ -203,6 +266,10 @@ class Executor:
     
     async def map_async(self, func: Callable, items: Iterable, timeout: float = None) -> List[TaskResult]:
         """Map function over items asynchronously."""
+
+
+# Deprecated alias kept for back-compat:
+Executor = LocalProcedureCaller
 ```
 
 > Note: `submit` accepts a `priority` keyword for signature compatibility,
@@ -219,15 +286,18 @@ class ExecutionMode(str, Enum):
 
 ## Local vs Remote
 
-`Executor` is local request-reply. For the remote equivalent -- dispatching
-a call to a worker process or another machine and getting the value back --
-use [RPC](rpc.md): `RPCServer` registers methods and `RPCClient.call(name,
-*args)` invokes them over a `MessageQueue`. Both follow the same
+`LocalProcedureCaller` is local request-reply. For the remote equivalent --
+dispatching a call to a worker process or another machine and getting the
+value back -- use [RPC](rpc.md): `RPCServer` registers methods and
+`RPCClient.call(method, *args)` invokes them over a `MessageQueue`. Both
+satisfy the [`Caller` protocol](#the-caller-protocol) and follow the same
 call-and-return shape; the difference is distance.
 
-To wire an `Executor` into the `@task` facade (so a decorated function runs
-through a thread/process pool with observers attached), pass it as
-`@task(executor=...)` -- see [Task Decorator](task.md).
+To wire a `LocalProcedureCaller` into the `@task` facade (so a decorated
+function runs through a thread/process pool with observers attached), pass it
+as `@task(caller=...)`; pass an `RPCClient` instead to dispatch the same
+function remotely -- see [Task Decorator](task.md). (`@task` also accepts a
+deprecated `executor=` alias.)
 
 ### TaskResult
 
@@ -253,7 +323,7 @@ class TaskResult(BaseModel):
 ### Parallel File Processing
 
 ```python
-from eventforge import Executor, ExecutionMode
+from eventforge import LocalProcedureCaller, ExecutionMode
 from pathlib import Path
 
 def process_file(filepath):
@@ -263,9 +333,9 @@ def process_file(filepath):
 
 files = ["file1.txt", "file2.txt", "file3.txt"]
 
-with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
-    results = executor.map(process_file, files)
-    
+with LocalProcedureCaller(mode=ExecutionMode.THREAD, max_workers=4) as caller:
+    results = caller.map(process_file, files)
+
     for r in results:
         if r.is_success:
             print(f"{r.value['file']}: {r.value['words']} words")
@@ -274,7 +344,7 @@ with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
 ### CPU-Bound Batch Processing
 
 ```python
-from eventforge import Executor, ExecutionMode
+from eventforge import LocalProcedureCaller, ExecutionMode
 import math
 
 def calculate_primes(n):
@@ -288,9 +358,9 @@ def calculate_primes(n):
 
 ranges = [100000, 200000, 300000, 400000]
 
-with Executor(mode=ExecutionMode.PROCESS, max_workers=4) as executor:
-    results = executor.map(calculate_primes, ranges)
-    
+with LocalProcedureCaller(mode=ExecutionMode.PROCESS, max_workers=4) as caller:
+    results = caller.map(calculate_primes, ranges)
+
     for r, n in zip(results, ranges):
         print(f"Primes up to {n}: {r.value}")
 ```
@@ -298,13 +368,13 @@ with Executor(mode=ExecutionMode.PROCESS, max_workers=4) as executor:
 ### Mixed Workload
 
 ```python
-from eventforge import Executor, ExecutionMode
+from eventforge import LocalProcedureCaller, ExecutionMode
 
 # Use thread mode for I/O
-io_executor = Executor(mode=ExecutionMode.THREAD, max_workers=8)
+io_caller = LocalProcedureCaller(mode=ExecutionMode.THREAD, max_workers=8)
 
 # Use process mode for CPU
-cpu_executor = Executor(mode=ExecutionMode.PROCESS, max_workers=4)
+cpu_caller = LocalProcedureCaller(mode=ExecutionMode.PROCESS, max_workers=4)
 
 def fetch_data(url):
     # I/O bound
@@ -315,12 +385,12 @@ def process_data(data):
     # CPU bound
     return len(data.split())
 
-with io_executor, cpu_executor:
+with io_caller, cpu_caller:
     # Fetch in parallel
     urls = ["http://example.com"] * 10
-    fetch_results = io_executor.map(fetch_data, urls)
-    
+    fetch_results = io_caller.map(fetch_data, urls)
+
     # Process in parallel
     data_list = [r.value for r in fetch_results if r.is_success]
-    process_results = cpu_executor.map(process_data, data_list)
+    process_results = cpu_caller.map(process_data, data_list)
 ```
