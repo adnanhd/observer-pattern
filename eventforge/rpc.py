@@ -162,11 +162,21 @@ class RPCClient:
         self._timeout = timeout
 
     def call(
-        self, method: str, *args: Any, timeout: float | None = None, **kwargs: Any
+        self,
+        method: str | Callable[..., Any],
+        *args: Any,
+        timeout: float | None = None,
+        **kwargs: Any,
     ) -> Any:
-        """Call remote method synchronously."""
+        """Call remote method synchronously.
+
+        ``method`` may be a method-name string or a callable, in which case
+        its ``__name__`` is used as the remote method name. The callable's
+        body is never executed locally -- it serves as the reference impl.
+        """
+        name = method.__name__ if callable(method) else method
         request = RPCRequest(
-            method=method, args=args, kwargs=kwargs, timeout=timeout or self._timeout
+            method=name, args=args, kwargs=kwargs, timeout=timeout or self._timeout
         )
 
         reply_topic = f"_rpc_reply.{request.id}"
@@ -185,7 +195,7 @@ class RPCClient:
             reply_topic, timeout=timeout or self._timeout
         )
         if not response_msg:
-            raise TimeoutError(f"RPC call to {method} timed out")
+            raise TimeoutError(f"RPC call to {name} timed out")
 
         response = RPCResponse.model_validate(response_msg.payload)
         if response.error:
@@ -265,7 +275,11 @@ class RoundRobinRPCClient:
         return client
 
     def call(
-        self, method: str, *args: Any, timeout: float | None = None, **kwargs: Any
+        self,
+        method: str | Callable[..., Any],
+        *args: Any,
+        timeout: float | None = None,
+        **kwargs: Any,
     ) -> Any:
         return self._next_client().call(method, *args, timeout=timeout, **kwargs)
 
@@ -301,7 +315,9 @@ def with_retry(
             self._backoff_factor = backoff_factor
             self._retry_on = retry_on
 
-        def call(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        def call(
+            self, method: str | Callable[..., Any], *args: Any, **kwargs: Any
+        ) -> Any:
             delay = self._backoff_initial
             last_exc: BaseException | None = None
             for attempt in range(self._max_retries + 1):

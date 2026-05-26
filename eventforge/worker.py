@@ -70,9 +70,7 @@ def _load_handlers(
         )
     bad = [k for k, v in handlers.items() if not callable(v)]
     if bad:
-        raise SystemExit(
-            f"eventforge.worker: HANDLERS entries are not callable: {bad}"
-        )
+        raise SystemExit(f"eventforge.worker: HANDLERS entries are not callable: {bad}")
 
     service_name = getattr(module, "SERVICE_NAME", None)
     return handlers, service_name

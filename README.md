@@ -426,7 +426,7 @@ remote.peers                                      # connected peer node ids
 remote.close()
 ```
 
-### Executor
+### LocalProcedureCaller (alias: Executor)
 
 ```python
 executor = Executor(mode=ExecutionMode.SEQUENTIAL, max_workers=4)
