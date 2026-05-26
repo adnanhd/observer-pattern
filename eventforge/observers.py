@@ -25,7 +25,7 @@ Core concepts
                     gpus, handler) + load metric. Used by resource-aware
                     dispatchers for cluster-style scheduling.
 
-``Meter``           ``Observable`` subclass with running-average state
+``AvgMeter``           ``Observable`` subclass with running-average state
                     (val/avg/sum/count) + ``on_start`` / ``on_success`` /
                     ``on_failure`` / ``on_complete`` convention methods.
                     Auto-emits ``"measurement"`` after each ``on_success``.
@@ -33,7 +33,7 @@ Core concepts
 ``Reporter``        ``Observable`` subclass that auto-subscribes methods
                     marked with ``@observe(MeterCls, "event")`` at
                     ``__init__`` -- not a task lifecycle listener, only
-                    reacts to upstream Meter emissions.
+                    reacts to upstream AvgMeter emissions.
 
 Lifecycle event names (extensible; just call ``self.fire("name", ...)``):
 
@@ -256,7 +256,7 @@ class Eventful:
         self._lock = threading.Lock()
         # When owner+name are set, fire() also walks owner's MRO for
         # class-level subscribers. Avoids the previous monkey-patch
-        # approach where Meter.__init__ was rewritten to wrap channel.fire.
+        # approach where AvgMeter.__init__ was rewritten to wrap channel.fire.
         self._owner = owner
         self._name = name
 
@@ -432,11 +432,11 @@ class Node:
 
 
 # =============================================================================
-# Meter -- Observable + aggregator + lifecycle convention
+# AvgMeter -- Observable + aggregator + lifecycle convention
 # =============================================================================
 
 
-class Meter(Observable):
+class AvgMeter(Observable):
     """Aggregator + lifecycle observer + emission source.
 
     Three roles in one:
@@ -531,13 +531,13 @@ class Meter(Observable):
     def on_complete(self, ctx: Context) -> None:
         """finally: -- always. Default no-op."""
 
-    def attach(self, source: Observable) -> Meter:
+    def attach(self, source: Observable) -> AvgMeter:
         """Wire each ``on_<event>`` method as a subscriber to ``source.<event>``.
 
         Convention: method ``on_X`` -> subscribed to event ``"X"``. Returns
-        ``self`` for chaining (``Meter().attach(task)``).
+        ``self`` for chaining (``AvgMeter().attach(task)``).
 
-        The ``on_X`` method scan is cached per Meter subclass via
+        The ``on_X`` method scan is cached per AvgMeter subclass via
         ``_meter_event_names`` so attach() runs in O(channels) rather than
         re-walking ``dir(type(self))`` on every call.
         """
@@ -557,13 +557,13 @@ _METER_EVENT_NAMES_LOCK = threading.Lock()
 
 
 def _meter_event_names(meter_cls: type) -> tuple[str, ...]:
-    """Cached scan of ``on_X`` callables on a Meter subclass.
+    """Cached scan of ``on_X`` callables on a AvgMeter subclass.
 
     ``dir()`` + ``startswith`` cost ~43 string ops per attach for a typical
-    Meter; that scan is identical across all instances of the same class
+    AvgMeter; that scan is identical across all instances of the same class
     and across repeated attaches of the same instance, so we memoize it.
 
-    Backed by a ``WeakKeyDictionary`` so dynamically defined Meter
+    Backed by a ``WeakKeyDictionary`` so dynamically defined AvgMeter
     subclasses (e.g. one declared inside a test or factory function) can
     be garbage-collected normally -- the cache entry vanishes with them.
     """
@@ -608,7 +608,7 @@ class Reporter(Observable):
     Example::
 
         class LoggingReporter(Reporter):
-            @observe(Meter, "measurement")
+            @observe(AvgMeter, "measurement")
             def log_measurement(self, meter, value, ctx):
                 logger.info("%s = %s", meter.name, value)
     """
@@ -714,7 +714,7 @@ def observe(
 # =============================================================================
 
 
-class TimingMeter(Meter):
+class TimingMeter(AvgMeter):
     """Tracks per-call elapsed wall time."""
 
     name = "timing"
@@ -734,7 +734,7 @@ class TimingMeter(Meter):
         return elapsed
 
 
-class MemoryMeter(Meter):
+class MemoryMeter(AvgMeter):
     """Tracks per-call memory delta via :mod:`tracemalloc`."""
 
     name = "memory"
@@ -755,7 +755,7 @@ class MemoryMeter(Meter):
         return float(current - start)
 
 
-class CPUMeter(Meter):
+class CPUMeter(AvgMeter):
     """Tracks per-call user+system CPU time via :func:`resource.getrusage`."""
 
     name = "cpu"
@@ -773,7 +773,7 @@ class CPUMeter(Meter):
         return float((ru.ru_utime + ru.ru_stime) - start)
 
 
-class MetricsMeter(Meter):
+class MetricsMeter(AvgMeter):
     """Pulls a single numeric metric from ``ctx.result`` via an extractor fn."""
 
     def __init__(
@@ -797,10 +797,10 @@ class MetricsMeter(Meter):
 
 
 class LoggingReporter(Reporter):
-    """Logs every Meter's ``measurement`` event via stdlib logging.
+    """Logs every AvgMeter's ``measurement`` event via stdlib logging.
 
-    Subscribes to :class:`Meter` (MRO walk catches all subclasses), so a
-    single ``LoggingReporter()`` reports for every Meter instance in the
+    Subscribes to :class:`AvgMeter` (MRO walk catches all subclasses), so a
+    single ``LoggingReporter()`` reports for every AvgMeter instance in the
     process.
     """
 
@@ -817,8 +817,8 @@ class LoggingReporter(Reporter):
         self._log = logging.getLogger(logger_name)
         super().__init__()
 
-    @observe(Meter, "measurement")
-    def _on_measurement(self, meter: Meter, value: Any, ctx: Context) -> None:
+    @observe(AvgMeter, "measurement")
+    def _on_measurement(self, meter: AvgMeter, value: Any, ctx: Context) -> None:
         msg = f"{meter.name} = {value}"
         if self._log_args:
             msg += f" args={ctx.args!r} kwargs={ctx.kwargs!r}"

@@ -17,7 +17,7 @@ The model is `Observable` + `Eventful` + `Dispatcher`:
   `obj.success.on(fn)` or `obj.on("success", fn)`.
 - `Eventful` -- one pub-sub channel. `.on(fn)` subscribes, `.fire(*args)`
   dispatches.
-- `Meter` -- `Observable` subclass that measures one value per task call,
+- `AvgMeter` -- `Observable` subclass that measures one value per task call,
   keeps a running average (`val`/`avg`/`sum`/`count`), and emits a
   `measurement` event.
 - `Reporter` -- `Observable` subclass that auto-subscribes its
@@ -48,7 +48,7 @@ print(metrics.stats)  # {'val': 40.0, 'avg': 30.0, 'sum': 60.0, 'count': 2}
 ```
 
 `on_execute` accepts any number of meters; each is wired to the task's
-lifecycle channels via `Meter.attach(task)`.
+lifecycle channels via `AvgMeter.attach(task)`.
 
 ## Built-in Observers
 
@@ -104,7 +104,7 @@ that call.
 ### LoggingReporter
 
 `LoggingReporter` is a `Reporter`: instantiating one auto-subscribes it to
-the `measurement` event of *every* `Meter` in the process via stdlib
+the `measurement` event of *every* `AvgMeter` in the process via stdlib
 logging. You do not pass it to `on_execute`; you just construct it.
 
 ```python
@@ -113,7 +113,7 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-LoggingReporter(log_args=True, log_result=True)  # logs all Meter measurements
+LoggingReporter(log_args=True, log_result=True)  # logs all AvgMeter measurements
 
 timing = TimingMeter()
 
@@ -164,16 +164,16 @@ print(cpu.stats)
 # {'val': 0.05, 'avg': 0.05, 'sum': 0.05, 'count': 1}
 ```
 
-## Meter Aggregator
+## AvgMeter Aggregator
 
-A bare `Meter` is a running-average tracker you drive manually with
+A bare `AvgMeter` is a running-average tracker you drive manually with
 `update()`. Useful for training-loop metrics independent of tasks:
 
 ```python
-from eventforge import Meter
+from eventforge import AvgMeter
 
-loss_meter = Meter("loss")
-acc_meter = Meter("accuracy")
+loss_meter = AvgMeter("loss")
+acc_meter = AvgMeter("accuracy")
 
 # Training loop
 for batch in range(10):
@@ -209,7 +209,7 @@ def my_function():
     return list(range(42))
 ```
 
-Equivalently, attach meters to any `Observable` (or another `Meter`) by
+Equivalently, attach meters to any `Observable` (or another `AvgMeter`) by
 hand with `meter.attach(source)`, or subscribe to channels directly:
 
 ```python
@@ -230,17 +230,17 @@ work()
 
 There is no `Observer` base class. Extend the system one of three ways.
 
-### Custom Meter
+### Custom AvgMeter
 
-Subclass `Meter` and override `measure(ctx) -> float | None` (and optionally
+Subclass `AvgMeter` and override `measure(ctx) -> float | None` (and optionally
 `on_start` to stash a baseline). The default `on_success` calls `measure`,
 updates the running average, and fires `self.measurement`:
 
 ```python
-from eventforge import task, Meter
+from eventforge import task, AvgMeter
 from eventforge.observers import Context
 
-class GPUMemoryMeter(Meter):
+class GPUMemoryMeter(AvgMeter):
     """Track GPU memory delta (requires torch)."""
 
     name = "gpu_mem"
@@ -278,18 +278,18 @@ instance of `MeterCls` (and its subclasses). Use this to ship measurements
 somewhere -- a totals counter, a metrics backend, etc.:
 
 ```python
-from eventforge import Reporter, Meter, TimingMeter, task, observe
+from eventforge import Reporter, AvgMeter, TimingMeter, task, observe
 from eventforge.observers import Context
 
 class TotalsReporter(Reporter):
-    """Sum every measurement emitted by any Meter."""
+    """Sum every measurement emitted by any AvgMeter."""
 
     def __init__(self) -> None:
         self.total = 0.0
         super().__init__()  # auto-wires the @observe method below
 
-    @observe(Meter, "measurement")
-    def _on_measurement(self, meter: Meter, value, ctx: Context) -> None:
+    @observe(AvgMeter, "measurement")
+    def _on_measurement(self, meter: AvgMeter, value, ctx: Context) -> None:
         if value is not None:
             self.total += value
 
@@ -389,10 +389,10 @@ def observe(target_cls: type, event: str):
     target_cls.<event>. Wired at the Reporter's __init__."""
 ```
 
-### Meter
+### AvgMeter
 
 ```python
-class Meter(Observable):
+class AvgMeter(Observable):
     name: str = "meter"
 
     def __init__(self, name=None, dispatcher=None): ...
@@ -411,7 +411,7 @@ class Meter(Observable):
     def on_failure(self, ctx) -> None: ...
     def on_complete(self, ctx) -> None: ...
 
-    def attach(self, source: Observable) -> "Meter": ...
+    def attach(self, source: Observable) -> "AvgMeter": ...
 
     # Emission channels (Eventful):
     #   measurement   fires (meter, value, ctx) after each on_success
@@ -422,14 +422,14 @@ class Meter(Observable):
 ### TimingMeter
 
 ```python
-class TimingMeter(Meter):
+class TimingMeter(AvgMeter):
     def __init__(self, threshold: float | None = None, name: str = "timing"): ...
 ```
 
 ### MetricsMeter
 
 ```python
-class MetricsMeter(Meter):
+class MetricsMeter(AvgMeter):
     def __init__(self, name: str, extract: Callable[[Context], float | None]): ...
 ```
 
@@ -445,11 +445,11 @@ class Reporter(Observable):
 ### Training Loop Profiling
 
 ```python
-from eventforge import task, TimingMeter, Meter
+from eventforge import task, TimingMeter, AvgMeter
 
 forward_timer = TimingMeter(name="forward")
-loss_meter = Meter("loss")
-acc_meter = Meter("accuracy")
+loss_meter = AvgMeter("loss")
+acc_meter = AvgMeter("accuracy")
 
 @task(on_execute=[forward_timer])
 def forward_pass(model, x):
