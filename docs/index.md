@@ -4,29 +4,41 @@ Message-driven task execution with pub-sub, executors, and RPC.
 
 ## Overview
 
-eventforge is a Python library for building message-driven applications with:
+eventforge is a Python library for building message-driven applications. The
+mental model is a 2x2 of *what kind of exchange* (pub-sub fire-and-forget vs
+request-reply) by *where the other side lives* (local vs remote):
 
-- **Task Decorator**: Unified task abstraction with lifecycle support
-- **Message Queue**: Pub-sub messaging with Pydantic validation
-- **Executor**: Run tasks in sequential, thread, or process mode
-- **RPC**: Remote procedure calls over message queue
-- **Remote Queue**: Bridge queues across distributed nodes
-- **Observers**: Profile and monitor task execution
+|                  | local          | remote        |
+|------------------|----------------|---------------|
+| **pub-sub**      | `MessageQueue` | `RemoteQueue` |
+| **request-reply**| `LocalProcedureCaller` | RPC (`RPCServer` / `RPCClient`) |
+
+The request-reply row is unified by the `Caller` protocol:
+`LocalProcedureCaller : RPCClient :: Local : Remote Procedure Call`. The
+`Transport` (Memory or TCP) is *where* local-vs-remote lives. `@task` is
+not a fifth box -- it is a facade that composes a `Caller` + a
+`MessageQueue` + `Observers`.
+
+- **Message Queue**: local pub-sub messaging with Pydantic validation
+- **Remote Queue**: push-only switchboard for cross-node pub-sub
+- **LocalProcedureCaller**: local request-reply -- run work in sequential, thread, or process mode (`Executor` is a deprecated alias)
+- **RPC**: remote request-reply over a message queue (`RPCClient` is the remote `Caller`)
+- **Task Decorator**: facade composing a runner + queue + observers
+- **Observers**: profile and monitor task execution
 
 ## Installation
 
 ```bash
 pip install eventforge
-
-# Optional transports
-pip install eventforge[redis]
-pip install eventforge[zmq]
 ```
+
+Core install pulls only `pydantic` + `typing-extensions`. The TCP transport
+is stdlib.
 
 ## Quick Start
 
 ```python
-from eventforge import task, MessageQueue, Executor, ExecutionMode, TimingMeter
+from eventforge import task, MessageQueue, LocalProcedureCaller, ExecutionMode, TimingMeter
 
 queue = MessageQueue()
 timing = TimingMeter()
@@ -51,8 +63,8 @@ queue.publish("process.data", "world")
 print(timing.stats)  # {'count': 2, 'avg': 0.001, ...}
 
 # Parallel execution
-with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
-    results = executor.map(lambda x: x ** 2, [1, 2, 3, 4, 5])
+with LocalProcedureCaller(mode=ExecutionMode.THREAD, max_workers=4) as caller:
+    results = caller.map(lambda x: x ** 2, [1, 2, 3, 4, 5])
 ```
 
 ## Execution Flow Diagrams
@@ -166,40 +178,41 @@ sequenceDiagram
     C-->>C: Return result
 ```
 
-### Distributed RemoteQueue Bridging
+### RemoteQueue Push-Only Switchboard
 
 ```mermaid
-flowchart TB
-    subgraph Node1["Node 1"]
-        RQ1["RemoteQueue\nnode-1"]
-        Q1["MessageQueue"]
-        RPC1["RPC Server\nremote.node-1"]
-        RQ1 --- Q1
-        RQ1 --- RPC1
+flowchart LR
+    subgraph Coord["Coordinator (sender)"]
+        RQ1["RemoteQueue\ncoordinator"]
+        T1["TCPClientTransport\n(owned per peer)"]
+        RQ1 --- T1
     end
 
-    subgraph Node2["Node 2"]
-        RQ2["RemoteQueue\nnode-2"]
-        Q2["MessageQueue"]
-        RPC2["RPC Server\nremote.node-2"]
-        RQ2 --- Q2
-        RQ2 --- RPC2
+    subgraph Worker["Worker (receiver)"]
+        RQ2["RemoteQueue\nworker-1"]
+        LQ["local MessageQueue\n(TCPServerTransport)"]
+        H["@worker.on('work')\nhandler"]
+        RQ2 --- LQ
+        LQ --- H
     end
 
-    RQ1 -->|"subscribe_remote\n('node-2', 'events.order')"| RPC2
-    RPC2 -->|"forward matching\nmessages"| Q1
-    RQ2 -->|"publish\n('events.order', data)"| Q2
-    Q2 -.->|"trigger forward\nvia subscription"| RPC2
+    RQ1 -->|"send('worker-1', 'work', payload)\nbroadcast('work', payload)"| T1
+    T1 -->|"JSON / TCP"| LQ
 
-    style Node1 fill:#f0f9ff,stroke:#4a9eff
-    style Node2 fill:#f0fdf4,stroke:#22c55e
+    style Coord fill:#f0f9ff,stroke:#4a9eff
+    style Worker fill:#f0fdf4,stroke:#22c55e
 ```
+
+A node owns one outbound TCP link per peer for `send` / `broadcast`, and
+receives via an optional `local` MessageQueue that peers push into. It is
+push-only: to pull a value from a peer, use RPC. See
+[Remote Queue](remote.md).
 
 ## Modules
 
 - [Task](task.md) - Unified task decorator with lifecycle support
 - [Message Queue](queue.md) - Pub-sub messaging
-- [Executor](executor.md) - Parallel task execution
+- [LocalProcedureCaller](executor.md) - Parallel task execution (local Caller)
 - [RPC](rpc.md) - Remote procedure calls
 - [Remote Queue](remote.md) - Distributed messaging
 - [Observers](observers.md) - Execution profiling
@@ -209,16 +222,19 @@ flowchart TB
 
 ```
 eventforge/
-├── types.py          # Pydantic models (Message, TaskResult, TaskContext, etc.)
-├── transports/       # Message transport backends
-│   ├── base.py       # Transport protocol
-│   └── memory.py     # In-memory transport
-├── queue.py          # MessageQueue with pub-sub
-├── executor.py       # Unified Executor
-├── task.py           # @task decorator and TaskRunner
-├── rpc.py            # RPCServer and RPCClient
-├── remote.py         # RemoteQueue for distributed messaging
-└── observers.py      # Execution observers and Meter
+  types.py          # Pydantic models (Message, TaskResult, TaskContext, etc.)
+  transports/       # Message transport backends
+    base.py         # Transport ABC
+    memory.py       # In-memory transport (default)
+    tcp.py          # JSON-over-TCP server/client transports
+  queue.py          # MessageQueue with pub-sub
+  remote.py         # RemoteQueue push-only switchboard
+  executor.py       # LocalProcedureCaller (local request-reply)
+  caller.py         # Caller protocol (unifies local + remote)
+  rpc.py            # RPCServer and RPCClient (remote request-reply)
+  task.py           # @task facade + TaskRunner
+  observers.py      # Observable / Eventful / Dispatcher + Meters
+  worker.py         # python -m eventforge.worker entrypoint
 ```
 
 ## License
