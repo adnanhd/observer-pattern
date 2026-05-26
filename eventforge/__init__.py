@@ -29,7 +29,7 @@ from eventforge.observers import (
     observe,
 )
 from eventforge.queue import MessageQueue
-from eventforge.remote import RemoteQueue, RemoteSubscription
+from eventforge.remote import RemoteQueue
 from eventforge.rpc import RoundRobinRPCClient, RPCClient, RPCServer, with_retry
 from eventforge.task import TaskPool, TaskRunner, task
 from eventforge.transports import (
@@ -73,7 +73,6 @@ __all__ = [
     # Queue
     "MessageQueue",
     "RemoteQueue",
-    "RemoteSubscription",
     "WorkQueue",
     "QueueFullError",
     # Executor / Caller
