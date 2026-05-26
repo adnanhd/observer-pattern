@@ -1,0 +1,51 @@
+# eventforge-network topology on a single machine.
+#
+#   demander  --RPC(JSON/TCP)-->  server1
+#                            \-->  server2   (round-robin, client-side)
+#                            \-->  server3
+#
+# Each server runs `python -m eventforge.worker` against handlers.py.
+# The demander connects to all three and round-robins compute() calls.
+#
+#   docker compose -f deploy/docker-compose.yml up --build
+#
+# Watch the demander logs: the 12 calls spread evenly across the 3 servers.
+# Scale the pool by adding serverN services and listing them in
+# EVENTFORGE_SERVERS (there is no auto-discovery -- the demander needs the
+# full address list, which is the honest cost of a broker-less topology).
+
+x-eventforge: &eventforge
+  image: eventforge:latest
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  volumes:
+    - ./topology:/work
+  environment:
+    PYTHONPATH: /work
+
+services:
+  server1:
+    <<: *eventforge
+    command: ["--import", "handlers", "--service", "math", "--host", "0.0.0.0", "--port", "9090"]
+
+  server2:
+    <<: *eventforge
+    command: ["--import", "handlers", "--service", "math", "--host", "0.0.0.0", "--port", "9090"]
+
+  server3:
+    <<: *eventforge
+    command: ["--import", "handlers", "--service", "math", "--host", "0.0.0.0", "--port", "9090"]
+
+  demander:
+    <<: *eventforge
+    entrypoint: ["python", "/work/demander.py"]
+    environment:
+      PYTHONPATH: /work
+      EVENTFORGE_SERVERS: "server1:9090,server2:9090,server3:9090"
+      EVENTFORGE_SERVICE: "math"
+      EVENTFORGE_CALLS: "12"
+    depends_on:
+      - server1
+      - server2
+      - server3

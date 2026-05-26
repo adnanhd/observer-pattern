@@ -1,5 +1,8 @@
 # eventforge
 
+[![Docker](https://img.shields.io/badge/Docker-deploy%2FDockerfile-2496ED?logo=docker&logoColor=white)](deploy/Dockerfile)
+[![Apptainer](https://img.shields.io/badge/Apptainer-deploy%2Fapptainer-1D4ED8?logo=linuxcontainers&logoColor=white)](deploy/apptainer/eventforge.def)
+
 Message-driven task execution with pub-sub, executors, and RPC.
 
 `eventforge` is the **execution / dispatch** layer. Pair it with
@@ -262,6 +265,43 @@ The intended deployment for ML / data pipelines:
 See `examples/06_registry_integration.py` for the in-process version
 and `examples/07_distributed_workers.py` for the cross-process variant
 with N workers + round-robin client.
+
+### Containerized topology (Docker / Apptainer)
+
+The cross-process variant above containerizes into an
+**eventforge-network**: a pool of RPC *server* nodes and one or more
+*demander* (client) nodes that round-robin across them.
+
+```
+demander  --RPC (JSON/TCP)-->  server1
+                          \-->  server2   (round-robin, client-side)
+                          \-->  server3
+```
+
+Each server runs the generic worker entrypoint against a handler module
+-- no transport boilerplate, no inlined worker source:
+
+```bash
+python -m eventforge.worker --import handlers --service math --port 9090
+# handlers.py exposes:  HANDLERS = {"compute": compute};  SERVICE_NAME = "math"
+```
+
+Run the whole topology on one machine (3 servers + a demander):
+
+```bash
+docker compose -f deploy/docker-compose.yml up --build
+```
+
+**Scope, honestly:** this is an RPC compute-worker pool for a *trusted*
+network -- request/response, client-side load balancing (the demander
+needs every server address; no broker, no discovery), and the TCP
+transport has no auth/TLS. It is **not** a durable job queue:
+`WorkQueue`'s competing-consumer / ack-nack / DLQ machinery is
+in-process only and does not cross containers. For brokered, durable
+cross-machine queues use Celery / RQ / Dramatiq; eventforge's niche is
+scaling code *already* on the eventforge + registry-pattern stack
+without a second framework. Full guide and the `eventforge.worker`
+contract: [`deploy/README.md`](deploy/README.md).
 
 ## Logging
 
