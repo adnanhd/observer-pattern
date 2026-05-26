@@ -1,11 +1,11 @@
-"""Tests for WorkQueue: competing consumers, ack/nack, dead-letter, visibility timeout."""
+"""WorkQueue tests: competing consumers, ack/nack, dead-letter, visibility timeout."""
 
 import threading
 import time
 
 import pytest
 
-from eventforge.work_queue import InFlightEntry, QueueFullError, WorkQueue
+from eventforge.work_queue import QueueFullError, WorkQueue
 
 # ---------------------------------------------------------------------------
 # Enqueue
@@ -110,7 +110,7 @@ class TestWorkQueueDequeue:
         wq = WorkQueue()
         wq.enqueue("tasks", "hello")
         assert wq.in_flight_count() == 0
-        msg = wq.dequeue("tasks", timeout=1.0)
+        wq.dequeue("tasks", timeout=1.0)
         assert wq.in_flight_count() == 1
         assert wq.pending_count("tasks") == 0
         wq.close()
@@ -317,7 +317,7 @@ class TestWorkQueueCompetingConsumers:
         wq.consume("tasks", flaky_handler)
         wq.enqueue("tasks", "retry_me")
         time.sleep(0.5)
-        # Should have been called at least twice (first fails, requeued, second succeeds)
+        # Called at least twice: first fails, requeued, second succeeds
         assert len(call_count) >= 2
         wq.close()
 
@@ -554,7 +554,7 @@ class TestWorkQueueLifecycle:
         wq.enqueue("tasks", "a")
         wq.enqueue("tasks", "b")
         msg1 = wq.dequeue("tasks", timeout=1.0)
-        msg2 = wq.dequeue("tasks", timeout=1.0)
+        wq.dequeue("tasks", timeout=1.0)
         assert wq.in_flight_count() == 2
         assert wq.in_flight_count("tasks") == 1 or wq.in_flight_count("tasks") == 2
         wq.ack(msg1.headers["_wq_delivery_id"])

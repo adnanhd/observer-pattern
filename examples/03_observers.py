@@ -10,8 +10,6 @@ Demonstrates:
 import time
 
 from eventforge import (
-    CPUMeter,
-    LoggingReporter,
     MemoryMeter,
     MetricsMeter,
     Observer,

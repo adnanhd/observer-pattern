@@ -1,10 +1,11 @@
 """Core types for eventforge message queue and execution."""
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
@@ -29,10 +30,10 @@ class Message(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     topic: str
     payload: Any
-    headers: Dict[str, Any] = Field(default_factory=dict)
+    headers: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    reply_to: Optional[str] = None
-    correlation_id: Optional[str] = None
+    reply_to: str | None = None
+    correlation_id: str | None = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -42,10 +43,10 @@ class TaskRequest(BaseModel):
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     func_name: str
-    args: Tuple[Any, ...] = ()
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    args: tuple[Any, ...] = ()
+    kwargs: dict[str, Any] = Field(default_factory=dict)
     priority: int = 0
-    timeout: Optional[float] = None
+    timeout: float | None = None
 
     @field_validator("args", mode="before")
     @classmethod
@@ -61,8 +62,8 @@ class TaskResult(BaseModel):
     task_id: str
     status: TaskStatus
     value: Any = None
-    error: Optional[str] = None
-    error_type: Optional[str] = None
+    error: str | None = None
+    error_type: str | None = None
     execution_time: float = 0.0
     worker_id: str = ""
 
@@ -82,9 +83,9 @@ class RPCRequest(BaseModel):
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     method: str
-    args: Tuple[Any, ...] = ()
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
-    timeout: Optional[float] = None
+    args: tuple[Any, ...] = ()
+    kwargs: dict[str, Any] = Field(default_factory=dict)
+    timeout: float | None = None
 
     @field_validator("args", mode="before")
     @classmethod
@@ -100,8 +101,8 @@ class RPCResponse(BaseModel):
     id: str
     request_id: str
     result: Any = None
-    error: Optional[str] = None
-    error_type: Optional[str] = None
+    error: str | None = None
+    error_type: str | None = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -140,7 +141,7 @@ class SharedState:
     """
 
     def __init__(self):
-        self._data: Dict[str, Any] = {}
+        self._data: dict[str, Any] = {}
         self._lock = threading.RLock()
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -185,7 +186,7 @@ class SharedState:
         with self._lock:
             self._data.clear()
 
-    def items(self) -> Dict[str, Any]:
+    def items(self) -> dict[str, Any]:
         """Get a copy of all items."""
         with self._lock:
             return self._data.copy()
@@ -226,11 +227,11 @@ class TaskContext:
     # Task identification
     task_id: str
     func_name: str
-    topic: Optional[str] = None
+    topic: str | None = None
 
     # Execution info
     args: tuple = ()
-    kwargs: Dict[str, Any] = field(default_factory=dict)
+    kwargs: dict[str, Any] = field(default_factory=dict)
     executor: Optional["Executor"] = None
 
     # Timing
@@ -239,13 +240,13 @@ class TaskContext:
 
     # Result
     result: Any = None
-    error: Optional[Exception] = None
+    error: Exception | None = None
 
     # Shared state (thread-safe, shared across invocations)
-    state: Optional[SharedState] = None
+    state: SharedState | None = None
 
     # Metadata (per-invocation)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def execution_time(self) -> float:

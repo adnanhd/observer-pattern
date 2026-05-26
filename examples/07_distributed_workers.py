@@ -29,7 +29,7 @@ import time
 from itertools import cycle
 from typing import Any
 
-from registry import TypeRegistry, build, serialize
+from registry import TypeRegistry, serialize
 
 from eventforge import MessageQueue, RPCClient
 from eventforge.transports.tcp import TCPClientTransport

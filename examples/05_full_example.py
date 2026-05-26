@@ -89,7 +89,8 @@ def main():
     @queue.on("jobs.work.failure")
     def on_job_failure(msg):
         print(
-            f"  [FAIL] Job {msg.payload['task_id'][:8]}... error: {msg.payload['error']}"
+            f"  [FAIL] Job {msg.payload['task_id'][:8]}... "
+            f"error: {msg.payload['error']}"
         )
 
     # Submit jobs - wrap in try/except since failures raise
@@ -115,7 +116,7 @@ def main():
     time.sleep(0.1)
 
     # Print summary
-    print(f"\n=== Summary ===")
+    print("\n=== Summary ===")
     print(f"Successful: {len(results['success'])}")
     print(f"Failed: {len(results['failure'])}")
     print(f"\nTiming stats: {timing.stats}")

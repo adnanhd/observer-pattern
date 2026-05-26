@@ -3,9 +3,10 @@
 import threading
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 from uuid import uuid4
 
 from eventforge.queue import MessageQueue
@@ -56,7 +57,7 @@ class WorkQueue(MessageQueue):
 
     def __init__(
         self,
-        transport: Optional[Transport] = None,
+        transport: Transport | None = None,
         max_work_queue_size: int = 0,
         default_visibility_timeout: float = 30.0,
         max_retries: int = 3,
@@ -69,22 +70,22 @@ class WorkQueue(MessageQueue):
         self._reaper_interval = reaper_interval
 
         self._wq_lock = threading.RLock()
-        self._pending: Dict[str, deque] = defaultdict(deque)
-        self._in_flight: Dict[str, InFlightEntry] = {}
-        self._consumer_groups: Dict[Tuple[str, str], List[Callable]] = defaultdict(list)
-        self._rr_index: Dict[Tuple[str, str], int] = defaultdict(int)
-        self._consumer_registry: Dict[str, Tuple[str, str]] = {}
+        self._pending: dict[str, deque] = defaultdict(deque)
+        self._in_flight: dict[str, InFlightEntry] = {}
+        self._consumer_groups: dict[tuple[str, str], list[Callable]] = defaultdict(list)
+        self._rr_index: dict[tuple[str, str], int] = defaultdict(int)
+        self._consumer_registry: dict[str, tuple[str, str]] = {}
         self._pending_condition = threading.Condition(self._wq_lock)
         self._closed_wq = False
 
         self._reaper_running = False
-        self._reaper_thread: Optional[threading.Thread] = None
+        self._reaper_thread: threading.Thread | None = None
 
     def enqueue(
         self,
         topic: str,
         payload: Any,
-        visibility_timeout: Optional[float] = None,
+        visibility_timeout: float | None = None,
         **headers,
     ) -> str:
         """Put a message on the work queue for the given topic.
@@ -137,7 +138,7 @@ class WorkQueue(MessageQueue):
         self,
         topic: str,
         handler: Callable[[Message], None],
-        consumer_group: Optional[str] = None,
+        consumer_group: str | None = None,
     ) -> str:
         """Register a competing consumer (push-based).
 
@@ -166,8 +167,8 @@ class WorkQueue(MessageQueue):
     def dequeue(
         self,
         topic: str,
-        timeout: Optional[float] = None,
-    ) -> Optional[Message]:
+        timeout: float | None = None,
+    ) -> Message | None:
         """Pull one message from the work queue (blocking).
 
         The returned message's headers contain '_wq_delivery_id' which
@@ -289,7 +290,7 @@ class WorkQueue(MessageQueue):
         with self._wq_lock:
             return len(self._pending[topic])
 
-    def in_flight_count(self, topic: Optional[str] = None) -> int:
+    def in_flight_count(self, topic: str | None = None) -> int:
         """Return number of in-flight (delivered, not ack'd) messages."""
         with self._wq_lock:
             if topic is None:
@@ -337,7 +338,7 @@ class WorkQueue(MessageQueue):
 
     def _try_dispatch(self, topic: str) -> None:
         """Try to dispatch pending messages to push-consumers for a topic."""
-        to_invoke: List[Tuple[Callable, Message, str]] = []
+        to_invoke: list[tuple[Callable, Message, str]] = []
 
         with self._wq_lock:
             groups = [key for key in self._consumer_groups if key[0] == topic]
@@ -422,7 +423,7 @@ class WorkQueue(MessageQueue):
         """Background thread that requeues messages past their visibility timeout."""
         while self._reaper_running:
             now = time.monotonic()
-            expired: List[InFlightEntry] = []
+            expired: list[InFlightEntry] = []
 
             with self._wq_lock:
                 for delivery_id, entry in list(self._in_flight.items()):

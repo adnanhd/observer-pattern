@@ -1,13 +1,13 @@
 """Remote Procedure Call over message queue."""
 
 import asyncio
-import functools
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 from uuid import uuid4
 
-from eventforge.executor import ExecutionMode, Executor
+from eventforge.executor import Executor
 from eventforge.queue import MessageQueue
 from eventforge.types import Message, RPCRequest, RPCResponse
 
@@ -26,18 +26,18 @@ class RPCServer:
     def __init__(
         self,
         queue: MessageQueue,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
         service_name: str = "rpc",
     ):
         self._queue = queue
         self._executor = executor or Executor()
         self._service_name = service_name
-        self._methods: Dict[str, Callable] = {}
+        self._methods: dict[str, Callable] = {}
         self._running = False
-        self._sub_id: Optional[str] = None
+        self._sub_id: str | None = None
         self._stop_event = threading.Event()
 
-    def register(self, name: Optional[str] = None) -> Callable:
+    def register(self, name: str | None = None) -> Callable:
         """Decorator to register RPC method."""
 
         def decorator(func: Callable) -> Callable:
@@ -159,9 +159,7 @@ class RPCClient:
         self._service_name = service_name
         self._timeout = timeout
 
-    def call(
-        self, method: str, *args, timeout: Optional[float] = None, **kwargs
-    ) -> Any:
+    def call(self, method: str, *args, timeout: float | None = None, **kwargs) -> Any:
         """Call remote method synchronously."""
         request = RPCRequest(
             method=method, args=args, kwargs=kwargs, timeout=timeout or self._timeout
@@ -192,7 +190,7 @@ class RPCClient:
         return response.result
 
     async def call_async(
-        self, method: str, *args, timeout: Optional[float] = None, **kwargs
+        self, method: str, *args, timeout: float | None = None, **kwargs
     ) -> Any:
         """Call remote method asynchronously."""
         request = RPCRequest(
@@ -249,10 +247,10 @@ class RoundRobinRPCClient:
         result = lb.call("train_step", envelope)
     """
 
-    def __init__(self, clients: List["RPCClient"]):
+    def __init__(self, clients: list["RPCClient"]):
         if not clients:
             raise ValueError("RoundRobinRPCClient requires at least one RPCClient")
-        self._clients: List[RPCClient] = list(clients)
+        self._clients: list[RPCClient] = list(clients)
         self._idx = 0
         self._lock = threading.Lock()
 
@@ -262,9 +260,7 @@ class RoundRobinRPCClient:
             self._idx = (self._idx + 1) % len(self._clients)
         return client
 
-    def call(
-        self, method: str, *args, timeout: Optional[float] = None, **kwargs
-    ) -> Any:
+    def call(self, method: str, *args, timeout: float | None = None, **kwargs) -> Any:
         return self._next_client().call(method, *args, timeout=timeout, **kwargs)
 
     def __getattr__(self, name: str) -> Callable:
@@ -280,7 +276,7 @@ def with_retry(
     max_retries: int = 3,
     backoff_initial: float = 0.1,
     backoff_factor: float = 2.0,
-    retry_on: Tuple[type, ...] = (TimeoutError, ConnectionError),
+    retry_on: tuple[type, ...] = (TimeoutError, ConnectionError),
 ) -> "RPCClient":
     """Wrap ``client`` so each ``call()`` retries up to ``max_retries`` times.
 
@@ -301,7 +297,7 @@ def with_retry(
 
         def call(self, method: str, *args, **kwargs) -> Any:
             delay = self._backoff_initial
-            last_exc: Optional[BaseException] = None
+            last_exc: BaseException | None = None
             for attempt in range(self._max_retries + 1):
                 try:
                     return self._client.call(method, *args, **kwargs)

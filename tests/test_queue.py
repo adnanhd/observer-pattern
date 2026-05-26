@@ -37,12 +37,8 @@ class TestMessageQueue:
 
         # Note: Each subscribe creates its own transport subscription
         # so messages may be received by transport-level callbacks
-        sub1 = queue.subscribe(
-            "shared.topic", lambda m: results["handler1"].append(m.payload)
-        )
-        sub2 = queue.subscribe(
-            "shared.topic", lambda m: results["handler2"].append(m.payload)
-        )
+        queue.subscribe("shared.topic", lambda m: results["handler1"].append(m.payload))
+        queue.subscribe("shared.topic", lambda m: results["handler2"].append(m.payload))
 
         queue.publish("shared.topic", "data")
 

@@ -4,7 +4,8 @@ import functools
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 from uuid import uuid4
 
 from eventforge.executor import ExecutionMode, Executor
@@ -44,7 +45,7 @@ class TaskPool:
         self._queued = 0
         self._lock = threading.Lock()
 
-    def acquire(self, blocking: bool = True, timeout: Optional[float] = None) -> bool:
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
         """Acquire a slot in the pool.
 
         Args:
@@ -92,7 +93,7 @@ class TaskPool:
             return self.max_instances - self._active
 
     @property
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """Get pool statistics."""
         with self._lock:
             return {
@@ -106,7 +107,7 @@ class TaskPool:
     class _AcquireContext:
         """Context manager for pool slot acquisition."""
 
-        def __init__(self, pool: "TaskPool", blocking: bool, timeout: Optional[float]):
+        def __init__(self, pool: "TaskPool", blocking: bool, timeout: float | None):
             self.pool = pool
             self.blocking = blocking
             self.timeout = timeout
@@ -121,7 +122,7 @@ class TaskPool:
                 self.pool.release()
 
     def slot(
-        self, blocking: bool = True, timeout: Optional[float] = None
+        self, blocking: bool = True, timeout: float | None = None
     ) -> _AcquireContext:
         """Context manager for acquiring a pool slot.
 
@@ -170,15 +171,15 @@ class TaskRunner(Observable):
         func: Callable,
         topic: str,
         executor: Executor,
-        queue: Optional[Any] = None,  # MessageQueue, avoid circular import
-        on_execute: Optional[List[Any]] = None,
-        on_start: Optional[ContextHandler] = None,
-        on_success: Optional[ContextHandler] = None,
-        on_failure: Optional[ContextHandler] = None,
-        on_complete: Optional[ContextHandler] = None,
+        queue: Any | None = None,  # MessageQueue, avoid circular import
+        on_execute: list[Any] | None = None,
+        on_start: ContextHandler | None = None,
+        on_success: ContextHandler | None = None,
+        on_failure: ContextHandler | None = None,
+        on_complete: ContextHandler | None = None,
         publish_result: bool = True,
-        max_instances: Optional[int] = None,
-        instance_timeout: Optional[float] = None,
+        max_instances: int | None = None,
+        instance_timeout: float | None = None,
     ):
         self.func = func
         self.topic = topic
@@ -346,16 +347,16 @@ class TaskRunner(Observable):
 
 
 def task(
-    queue: Optional[Any] = None,
-    topic: Optional[str] = None,
-    executor: Optional[Executor] = None,
-    on_execute: Optional[List[Any]] = None,
-    on_success: Optional[ContextHandler] = None,
-    on_failure: Optional[ContextHandler] = None,
-    on_complete: Optional[ContextHandler] = None,
+    queue: Any | None = None,
+    topic: str | None = None,
+    executor: Executor | None = None,
+    on_execute: list[Any] | None = None,
+    on_success: ContextHandler | None = None,
+    on_failure: ContextHandler | None = None,
+    on_complete: ContextHandler | None = None,
     publish_result: bool = True,
-    max_instances: Optional[int] = None,
-    instance_timeout: Optional[float] = None,
+    max_instances: int | None = None,
+    instance_timeout: float | None = None,
 ):
     """Decorator that creates a callable task with full lifecycle support.
 

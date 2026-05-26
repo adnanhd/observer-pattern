@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import threading
-import time
-from typing import Any, List
+from typing import Any
 
 import pytest
 
@@ -27,7 +25,7 @@ def test_round_robin_dispatches_across_clients(monkeypatch: pytest.MonkeyPatch) 
     class _StubClient:
         def __init__(self, name: str) -> None:
             self.name = name
-            self.calls: List[Any] = []
+            self.calls: list[Any] = []
 
         def call(self, method: str, *args: Any, **kwargs: Any) -> Any:
             self.calls.append((method, args))
@@ -51,7 +49,7 @@ def test_round_robin_dynamic_attr_dispatches() -> None:
 
     class _StubClient:
         def __init__(self) -> None:
-            self.calls: List[Any] = []
+            self.calls: list[Any] = []
 
         def call(self, method: str, *args: Any, **kwargs: Any) -> Any:
             self.calls.append((method, args, kwargs))
