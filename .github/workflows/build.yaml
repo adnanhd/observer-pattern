@@ -31,13 +31,8 @@ jobs:
       - name: Format check with ruff
         run: ruff format --check eventforge/ tests/ examples/
 
-      # mypy strict is aspirational for now: the codebase predates strict
-      # typing and still has ~119 errors. Kept running (signal stays visible)
-      # but non-blocking until a dedicated typing pass lands. Flip to blocking
-      # by removing continue-on-error once the count reaches zero.
-      - name: Type-check with mypy
+      - name: Type-check with mypy (strict)
         run: mypy eventforge/
-        continue-on-error: true
 
       - name: Tests with pytest + coverage
         run: pytest tests/ --cov=eventforge/ --cov-report=term-missing

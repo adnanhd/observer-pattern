@@ -70,9 +70,11 @@ class WorkQueue(MessageQueue):
         self._reaper_interval = reaper_interval
 
         self._wq_lock = threading.RLock()
-        self._pending: dict[str, deque] = defaultdict(deque)
+        self._pending: dict[str, deque[Message]] = defaultdict(deque)
         self._in_flight: dict[str, InFlightEntry] = {}
-        self._consumer_groups: dict[tuple[str, str], list[Callable]] = defaultdict(list)
+        self._consumer_groups: dict[
+            tuple[str, str], list[Callable[[Message], None]]
+        ] = defaultdict(list)
         self._rr_index: dict[tuple[str, str], int] = defaultdict(int)
         self._consumer_registry: dict[str, tuple[str, str]] = {}
         self._pending_condition = threading.Condition(self._wq_lock)
@@ -86,7 +88,7 @@ class WorkQueue(MessageQueue):
         topic: str,
         payload: Any,
         visibility_timeout: float | None = None,
-        **headers,
+        **headers: Any,
     ) -> str:
         """Put a message on the work queue for the given topic.
 
@@ -338,7 +340,7 @@ class WorkQueue(MessageQueue):
 
     def _try_dispatch(self, topic: str) -> None:
         """Try to dispatch pending messages to push-consumers for a topic."""
-        to_invoke: list[tuple[Callable, Message, str]] = []
+        to_invoke: list[tuple[Callable[[Message], None], Message, str]] = []
 
         with self._wq_lock:
             groups = [key for key in self._consumer_groups if key[0] == topic]
@@ -381,7 +383,7 @@ class WorkQueue(MessageQueue):
             ).start()
 
     def _invoke_handler(
-        self, handler: Callable, message: Message, delivery_id: str
+        self, handler: Callable[[Message], None], message: Message, delivery_id: str
     ) -> None:
         """Invoke a push-consumer handler, auto-nacking on exception."""
         try:

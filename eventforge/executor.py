@@ -26,7 +26,10 @@ class ExecutionMode(str, Enum):
 
 
 def _run_with_timing(
-    task_id: str, func: Callable, args: tuple, kwargs: dict
+    task_id: str,
+    func: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> dict[str, Any]:
     """Worker entry: time the call and return a structured result.
 
@@ -69,9 +72,9 @@ class Executor:
         self._mode = mode
         self._max_workers = max_workers
         self._results: dict[str, TaskResult] = {}
-        self._futures: dict[str, Future] = {}
+        self._futures: dict[str, Future[TaskResult | dict[str, Any]]] = {}
         self._lock = threading.RLock()
-        self._pool = None
+        self._pool: ThreadPoolExecutor | ProcessPoolExecutor | None = None
         self._running = False
 
     @property
@@ -107,11 +110,11 @@ class Executor:
 
     def submit(
         self,
-        func: Callable,
-        *args,
+        func: Callable[..., Any],
+        *args: Any,
         priority: int = 0,
         timeout: float | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> str:
         """Submit task for execution. Returns task_id."""
         task_id = str(uuid4())
@@ -124,6 +127,8 @@ class Executor:
             if not self._running:
                 self.start()
 
+            assert self._pool is not None  # set by start() for non-sequential modes
+            future: Future[TaskResult | dict[str, Any]]
             if self._mode == ExecutionMode.THREAD:
                 future = self._pool.submit(
                     self._execute_sync, task_id, func, args, kwargs
@@ -138,16 +143,25 @@ class Executor:
             with self._lock:
                 self._futures[task_id] = future
 
-            future.add_done_callback(lambda f, tid=task_id: self._on_complete(tid, f))
+            def _done(
+                f: Future[TaskResult | dict[str, Any]], tid: str = task_id
+            ) -> None:
+                self._on_complete(tid, f)
+
+            future.add_done_callback(_done)
 
         return task_id
 
-    async def submit_async(self, func: Callable, *args, **kwargs) -> str:
+    async def submit_async(
+        self, func: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> str:
         """Submit task asynchronously."""
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, lambda: self.submit(func, *args, **kwargs)
-        )
+
+        def _submit() -> str:
+            return self.submit(func, *args, **kwargs)
+
+        return await loop.run_in_executor(None, _submit)
 
     def result(self, task_id: str, timeout: float | None = None) -> TaskResult:
         """Get task result (blocking)."""
@@ -203,21 +217,31 @@ class Executor:
         return await loop.run_in_executor(None, lambda: self.result(task_id, timeout))
 
     def map(
-        self, func: Callable, items: Iterable, timeout: float | None = None
+        self,
+        func: Callable[..., Any],
+        items: Iterable[Any],
+        timeout: float | None = None,
     ) -> list[TaskResult]:
         """Map function over items."""
         task_ids = [self.submit(func, item) for item in items]
         return [self.result(tid, timeout) for tid in task_ids]
 
     async def map_async(
-        self, func: Callable, items: Iterable, timeout: float | None = None
+        self,
+        func: Callable[..., Any],
+        items: Iterable[Any],
+        timeout: float | None = None,
     ) -> list[TaskResult]:
         """Map function over items asynchronously."""
         task_ids = [await self.submit_async(func, item) for item in items]
         return [await self.result_async(tid, timeout) for tid in task_ids]
 
     def _execute_sync(
-        self, task_id: str, func: Callable, args: tuple, kwargs: dict
+        self,
+        task_id: str,
+        func: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
     ) -> TaskResult:
         """Execute task synchronously."""
         start = time.time()
@@ -242,7 +266,9 @@ class Executor:
                 worker_id=worker_id,
             )
 
-    def _on_complete(self, task_id: str, future: Future) -> None:
+    def _on_complete(
+        self, task_id: str, future: Future[TaskResult | dict[str, Any]]
+    ) -> None:
         """Handle task completion."""
         try:
             result = future.result()
@@ -272,5 +298,5 @@ class Executor:
         self.start()
         return self
 
-    def __exit__(self, *args) -> None:
+    def __exit__(self, *args: Any) -> None:
         self.stop()

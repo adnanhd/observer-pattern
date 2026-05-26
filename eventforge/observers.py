@@ -54,11 +54,26 @@ import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from eventforge.types import TaskContext
 
+if TYPE_CHECKING:
+    from eventforge.executor import Executor
+
 logger = logging.getLogger(__name__)
+
+
+class LoadAware(Protocol):
+    """A subscriber that reports its current utilization in ``[0, 1]``.
+
+    Implemented by :class:`Node`; consumed by load-aware dispatchers
+    (:class:`LeastLoadedDispatcher`, :class:`ResourceAwareDispatcher`).
+    """
+
+    def load(self) -> float: ...
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 # =============================================================================
@@ -76,7 +91,7 @@ class ExecutionContext:
     """
 
     func_name: str
-    args: tuple
+    args: tuple[Any, ...]
     kwargs: dict[str, Any]
     start_time: float = 0.0
     end_time: float = 0.0
@@ -113,8 +128,8 @@ class Dispatcher(ABC):
     @abstractmethod
     def dispatch(
         self,
-        subscribers: list[Callable],
-        args: tuple,
+        subscribers: list[Callable[..., Any]],
+        args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> None: ...
 
@@ -122,7 +137,12 @@ class Dispatcher(ABC):
 class BroadcastDispatcher(Dispatcher):
     """Default: call every subscriber in order; swallow each one's exceptions."""
 
-    def dispatch(self, subscribers, args, kwargs):
+    def dispatch(
+        self,
+        subscribers: list[Callable[..., Any]],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
         for fn in subscribers:
             try:
                 fn(*args, **kwargs)
@@ -141,7 +161,12 @@ class RoundRobinDispatcher(Dispatcher):
         self._idx = 0
         self._lock = threading.Lock()
 
-    def dispatch(self, subscribers, args, kwargs):
+    def dispatch(
+        self,
+        subscribers: list[Callable[..., Any]],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
         if not subscribers:
             return
         with self._lock:
@@ -159,10 +184,15 @@ class ConcurrentDispatcher(Dispatcher):
     Subscribers run in parallel; fire returns immediately.
     """
 
-    def __init__(self, executor) -> None:
+    def __init__(self, executor: Executor) -> None:
         self._executor = executor
 
-    def dispatch(self, subscribers, args, kwargs):
+    def dispatch(
+        self,
+        subscribers: list[Callable[..., Any]],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
         for fn in subscribers:
             try:
                 self._executor.submit(fn, *args, **kwargs)
@@ -177,10 +207,16 @@ class LeastLoadedDispatcher(Dispatcher):
     instances). Saturated subscribers (load >= 1.0) are skipped.
     """
 
-    def dispatch(self, subscribers, args, kwargs):
+    def dispatch(
+        self,
+        subscribers: list[Callable[..., Any]],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
         if not subscribers:
             return
-        available = [(s, s.load()) for s in subscribers if s.load() < 1.0]
+        nodes = cast("list[LoadAware]", subscribers)
+        available = [(s, s.load()) for s in nodes if s.load() < 1.0]
         if not available:
             raise RuntimeError("all subscribers saturated")
         pick = min(available, key=lambda x: x[1])[0]
@@ -215,7 +251,7 @@ class Eventful:
         owner: Observable | None = None,
         name: str | None = None,
     ) -> None:
-        self._subscribers: list[Callable] = []
+        self._subscribers: list[Callable[..., Any]] = []
         self._dispatcher = dispatcher or BroadcastDispatcher()
         self._lock = threading.Lock()
         # When owner+name are set, fire() also walks owner's MRO for
@@ -224,7 +260,7 @@ class Eventful:
         self._owner = owner
         self._name = name
 
-    def subscribe(self, fn: Callable) -> Callable:
+    def subscribe(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         """Register ``fn`` to receive every fire on this channel. Returns ``fn``."""
         with self._lock:
             self._subscribers.append(fn)
@@ -233,7 +269,7 @@ class Eventful:
     # Convenience alias.
     on = subscribe
 
-    def unsubscribe(self, fn: Callable) -> bool:
+    def unsubscribe(self, fn: Callable[..., Any]) -> bool:
         with self._lock:
             try:
                 self._subscribers.remove(fn)
@@ -269,7 +305,7 @@ class Eventful:
                         )
 
     @property
-    def subscribers(self) -> list[Callable]:
+    def subscribers(self) -> list[Callable[..., Any]]:
         with self._lock:
             return list(self._subscribers)
 
@@ -303,7 +339,14 @@ class Observable:
     delegates to it. ``AttributeError`` raised if no such Eventful exists.
     """
 
-    def on(self, event: str, fn: Callable) -> Callable:
+    def on(self, event: str, /, fn: Callable[..., Any]) -> Callable[..., Any] | str:
+        """Subscribe ``fn`` to the ``event`` channel.
+
+        Returns the registered callable. Subclasses (e.g.
+        :class:`~eventforge.queue.MessageQueue`) may instead return an
+        opaque subscription-id ``str``; the union return type keeps those
+        overrides Liskov-compatible.
+        """
         target = getattr(self, event, None)
         if not isinstance(target, Eventful):
             raise AttributeError(
@@ -313,13 +356,22 @@ class Observable:
 
     subscribe = on  # alias
 
-    def fire(self, event: str, *args: Any, **kwargs: Any) -> None:
+    def fire(self, event: str, /, *args: Any, **kwargs: Any) -> str | None:
+        """Fire the ``event`` channel with ``*args``/``**kwargs``.
+
+        Returns ``None`` for the in-process channel form. Subclasses that
+        publish through a transport (e.g.
+        :class:`~eventforge.queue.MessageQueue`) may return a message-id
+        ``str``; the union return type keeps those overrides
+        Liskov-compatible.
+        """
         target = getattr(self, event, None)
         if not isinstance(target, Eventful):
             raise AttributeError(
                 f"{type(self).__name__} has no Eventful attribute {event!r}"
             )
         target.fire(*args, **kwargs)
+        return None
 
     def events(self) -> list[str]:
         """List of Eventful attribute names on this instance."""
@@ -352,7 +404,7 @@ class Node:
     cpus: int
     memory_gb: float
     gpus: list[int]
-    handler: Callable
+    handler: Callable[..., Any]
     _in_flight: int = field(default=0, init=False, repr=False)
     _lock: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False
@@ -404,7 +456,7 @@ class Meter(Observable):
        are :class:`Eventful` channels Reporters can subscribe to.
     """
 
-    name: ClassVar[str] = "meter"
+    name: str = "meter"
 
     def __init__(
         self,
@@ -498,11 +550,13 @@ class Meter(Observable):
         return self
 
 
-_METER_EVENT_NAMES: weakref.WeakKeyDictionary[type, tuple] = weakref.WeakKeyDictionary()
+_METER_EVENT_NAMES: weakref.WeakKeyDictionary[type, tuple[str, ...]] = (
+    weakref.WeakKeyDictionary()
+)
 _METER_EVENT_NAMES_LOCK = threading.Lock()
 
 
-def _meter_event_names(meter_cls: type) -> tuple:
+def _meter_event_names(meter_cls: type) -> tuple[str, ...]:
     """Cached scan of ``on_X`` callables on a Meter subclass.
 
     ``dir()`` + ``startswith`` cost ~43 string ops per attach for a typical
@@ -579,20 +633,27 @@ class Reporter(Observable):
 # of that class fires the corresponding event. Consulted directly by
 # :meth:`Eventful.fire` when the eventful was constructed with
 # ``owner`` + ``name``.
-_CLASS_SUBSCRIBERS: dict[type, dict[str, list[Callable]]] = {}
+_CLASS_SUBSCRIBERS: dict[type, dict[str, list[Callable[..., Any]]]] = {}
 
 
-def _register_class_subscriber(target_cls: type, event: str, fn: Callable) -> None:
+def _register_class_subscriber(
+    target_cls: type, event: str, fn: Callable[..., Any]
+) -> None:
     _CLASS_SUBSCRIBERS.setdefault(target_cls, {}).setdefault(event, []).append(fn)
 
 
-_REPORTER_OBSERVE_METHODS: weakref.WeakKeyDictionary[type, tuple] = (
+# Each entry: (attr_name, ((target_cls, event), ...)) -- the @observe targets
+# placed on the Reporter method.
+ObserveTargets = tuple[tuple[type, str], ...]
+ReporterMethods = tuple[tuple[str, ObserveTargets], ...]
+
+_REPORTER_OBSERVE_METHODS: weakref.WeakKeyDictionary[type, ReporterMethods] = (
     weakref.WeakKeyDictionary()
 )
 _REPORTER_OBSERVE_LOCK = threading.Lock()
 
 
-def _reporter_observe_methods(reporter_cls: type) -> tuple:
+def _reporter_observe_methods(reporter_cls: type) -> ReporterMethods:
     """Cached scan of ``@observe``-decorated methods on a Reporter subclass.
 
     Returns a tuple of ``(attr_name, targets)`` pairs where ``targets`` is
@@ -626,7 +687,9 @@ def _reporter_observe_methods(reporter_cls: type) -> tuple:
         return result
 
 
-def observe(target_cls: type, event: str) -> Callable:
+def observe(
+    target_cls: type, event: str
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Mark a Reporter method as a class-level subscriber to
     ``target_cls.<event>``.
 
@@ -637,7 +700,7 @@ def observe(target_cls: type, event: str) -> Callable:
     method is invoked.
     """
 
-    def deco(fn: Callable) -> Callable:
+    def deco(fn: Callable[..., Any]) -> Callable[..., Any]:
         existing = list(getattr(fn, "_observe_targets", []))
         existing.append((target_cls, event))
         fn._observe_targets = existing  # type: ignore[attr-defined]
@@ -664,7 +727,7 @@ class TimingMeter(Meter):
         ctx.metadata[f"{self.name}_start"] = time.perf_counter()
 
     def measure(self, ctx: Context) -> float:
-        start = ctx.metadata.get(f"{self.name}_start", ctx.start_time)
+        start: float = ctx.metadata.get(f"{self.name}_start", ctx.start_time)
         elapsed = time.perf_counter() - start
         if self.threshold and elapsed > self.threshold:
             ctx.metadata[f"{self.name}_exceeded"] = True

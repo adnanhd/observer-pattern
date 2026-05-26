@@ -2,7 +2,7 @@
 
 import threading
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from eventforge.queue import MessageQueue
@@ -79,7 +79,7 @@ class RemoteQueue:
             """Handle remote subscription request."""
             sub_id = str(uuid4())
 
-            def forward_handler(msg: Message):
+            def forward_handler(msg: Message) -> None:
                 # Forward message to remote subscriber
                 self._queue.publish(reply_topic, msg.model_dump())
 
@@ -87,7 +87,7 @@ class RemoteQueue:
             return sub_id
 
         @self._local_server.register(name="publish")
-        def handle_publish(topic: str, payload: Any, headers: dict) -> str:
+        def handle_publish(topic: str, payload: Any, headers: dict[str, Any]) -> str:
             """Handle remote publish request."""
             return self._queue.publish(topic, payload, **headers)
 
@@ -173,7 +173,7 @@ class RemoteQueue:
             reply_topic = f"_remote_sub.{self._node_id}.{uuid4()}"
 
             # Subscribe locally to receive forwarded messages
-            def local_handler(msg: Message):
+            def local_handler(msg: Message) -> None:
                 try:
                     # Reconstruct the original message
                     if isinstance(msg.payload, dict) and "topic" in msg.payload:
@@ -186,8 +186,9 @@ class RemoteQueue:
 
             self._queue.subscribe(reply_topic, local_handler)
 
-            # Request remote subscription
-            sub_id = client.call("subscribe", topic, reply_topic)
+            # Request remote subscription; the remote "subscribe" handler
+            # returns a subscription-id string.
+            sub_id = cast(str, client.call("subscribe", topic, reply_topic))
 
             subscription = RemoteSubscription(
                 subscription_id=sub_id,
@@ -204,7 +205,7 @@ class RemoteQueue:
         remote_node_id: str,
         topic: str,
         payload: Any,
-        **headers,
+        **headers: Any,
     ) -> str:
         """Publish a message to a remote node.
 
@@ -222,9 +223,10 @@ class RemoteQueue:
             if not client:
                 raise ValueError(f"Not connected to remote node: {remote_node_id}")
 
-            return client.call("publish", topic, payload, headers)
+            # The remote "publish" handler returns a message-id string.
+            return cast(str, client.call("publish", topic, payload, headers))
 
-    def publish(self, topic: str, payload: Any, **headers) -> str:
+    def publish(self, topic: str, payload: Any, **headers: Any) -> str:
         """Publish to local queue."""
         return self._queue.publish(topic, payload, **headers)
 
@@ -232,11 +234,13 @@ class RemoteQueue:
         """Subscribe to local queue."""
         return self._queue.subscribe(topic, handler)
 
-    def on(self, topic: str) -> Callable:
+    def on(
+        self, topic: str
+    ) -> Callable[[Callable[[Message], None]], Callable[[Message], None]]:
         """Decorator for local subscription."""
         return self._queue.on(topic)
 
-    def broadcast(self, topic: str, payload: Any, **headers) -> dict[str, str]:
+    def broadcast(self, topic: str, payload: Any, **headers: Any) -> dict[str, str]:
         """Broadcast message to all connected nodes.
 
         Returns:
@@ -265,5 +269,5 @@ class RemoteQueue:
     def __enter__(self) -> "RemoteQueue":
         return self
 
-    def __exit__(self, *args) -> None:
+    def __exit__(self, *args: Any) -> None:
         self.close()

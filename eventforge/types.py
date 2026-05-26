@@ -50,7 +50,7 @@ class TaskRequest(BaseModel):
 
     @field_validator("args", mode="before")
     @classmethod
-    def convert_args(cls, v):
+    def convert_args(cls, v: Any) -> Any:
         if isinstance(v, list):
             return tuple(v)
         return v
@@ -89,7 +89,7 @@ class RPCRequest(BaseModel):
 
     @field_validator("args", mode="before")
     @classmethod
-    def convert_args(cls, v):
+    def convert_args(cls, v: Any) -> Any:
         if isinstance(v, list):
             return tuple(v)
         return v
@@ -140,7 +140,7 @@ class SharedState:
         state.items()  # {"count": 2}
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._data: dict[str, Any] = {}
         self._lock = threading.RLock()
 
@@ -230,7 +230,7 @@ class TaskContext:
     topic: str | None = None
 
     # Execution info
-    args: tuple = ()
+    args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = field(default_factory=dict)
     executor: Optional["Executor"] = None
 
