@@ -9,7 +9,7 @@ from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from eventforge.executor import ExecutionMode, Executor
-from eventforge.observers import Eventful, Meter, Observable
+from eventforge.observers import AvgMeter, Eventful, Observable
 from eventforge.types import Message, SharedState, TaskContext
 
 logger = logging.getLogger(__name__)
@@ -223,7 +223,7 @@ class TaskRunner(Observable):
 
         # Subscribe Meters / Observables that brought their own ``attach``.
         for obs in on_execute or []:
-            if isinstance(obs, Meter):
+            if isinstance(obs, AvgMeter):
                 obs.attach(self)
             elif hasattr(obs, "attach"):
                 obs.attach(self)

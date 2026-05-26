@@ -3,12 +3,13 @@
 A unified ``Observable`` + ``Eventful`` + ``Dispatcher`` primitive
 covers in-process pub-sub, cross-process RPC, work queues, parallel
 fan-out, and resource-aware load balancing. Meters measure tasks and
-emit events; Reporters subscribe to Meter emissions and ship them
+emit events; Reporters subscribe to AvgMeter emissions and ship them
 externally (logging, syslog, OpenTelemetry, ...).
 """
 
 from eventforge.executor import ExecutionMode, Executor
 from eventforge.observers import (
+    AvgMeter,
     BroadcastDispatcher,
     ConcurrentDispatcher,
     CPUMeter,
@@ -18,7 +19,6 @@ from eventforge.observers import (
     LeastLoadedDispatcher,
     LoggingReporter,
     MemoryMeter,
-    Meter,
     MetricsMeter,
     Node,
     Observable,
@@ -98,7 +98,7 @@ __all__ = [
     "ConcurrentDispatcher",
     "LeastLoadedDispatcher",
     # Meters
-    "Meter",
+    "AvgMeter",
     "TimingMeter",
     "MemoryMeter",
     "CPUMeter",

@@ -1,4 +1,4 @@
-"""Tests for Observable / Eventful / Meter / Reporter and dispatchers."""
+"""Tests for Observable / Eventful / AvgMeter / Reporter and dispatchers."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from eventforge import (
+    AvgMeter,
     BroadcastDispatcher,
     ConcurrentDispatcher,
     Eventful,
     ExecutionContext,
     LeastLoadedDispatcher,
-    Meter,
     MetricsMeter,
     Node,
     Observable,
@@ -206,33 +206,33 @@ class TestNode:
 
 
 # =============================================================================
-# Meter
+# AvgMeter
 # =============================================================================
 
 
 class TestMeter:
     def test_aggregator(self):
-        m = Meter("loss")
+        m = AvgMeter("loss")
         m.update(2.0)
         m.update(4.0)
         m.update(6.0)
         assert m.stats == {"val": 6.0, "avg": 4.0, "sum": 12.0, "count": 3}
 
     def test_reset_clears_state(self):
-        m = Meter("x")
+        m = AvgMeter("x")
         m.update(5.0)
         m.reset()
         assert m.stats == {"val": 0.0, "avg": 0.0, "sum": 0.0, "count": 0}
 
     def test_update_event_fires(self):
-        m = Meter("y")
+        m = AvgMeter("y")
         seen = []
         m.update_event.on(lambda meter, val, n: seen.append((meter.name, val, n)))
         m.update(7.0, n=2)
         assert seen == [("y", 7.0, 2)]
 
     def test_measurement_fires_on_success(self):
-        class _MyMeter(Meter):
+        class _MyMeter(AvgMeter):
             def measure(self, ctx):
                 return 0.99
 
@@ -249,7 +249,7 @@ class TestMeter:
 
 class TestMeterAttach:
     def test_attach_wires_on_success(self):
-        m = Meter("x")
+        m = AvgMeter("x")
         seen = []
         m.measurement.on(lambda meter, val, ctx: seen.append("fired"))
 

@@ -2,10 +2,10 @@
 
 Meters attach to a task via ``@task(on_execute=[...])`` and accumulate a
 running aggregate exposed as ``.stats == {val, avg, sum, count}``. A
-``Reporter`` reacts to every Meter's ``"measurement"`` emission via
+``Reporter`` reacts to every AvgMeter's ``"measurement"`` emission via
 ``@observe(MeterCls, "measurement")``.
 
-Demonstrates: TimingMeter, MetricsMeter, MemoryMeter, a custom Meter, and a
+Demonstrates: TimingMeter, MetricsMeter, MemoryMeter, a custom AvgMeter, and a
 Reporter.
 """
 
@@ -13,8 +13,8 @@ import time
 from typing import Any
 
 from eventforge import (
+    AvgMeter,
     MemoryMeter,
-    Meter,
     MetricsMeter,
     Reporter,
     TimingMeter,
@@ -60,10 +60,10 @@ def main() -> None:
     allocate()
     print(f"memory.stats: {memory.stats}")
 
-    # --- Custom Meter: override measure() ---------------------------------
-    print("\n=== Custom Meter ===")
+    # --- Custom AvgMeter: override measure() ---------------------------------
+    print("\n=== Custom AvgMeter ===")
 
-    class RowCountMeter(Meter):
+    class RowCountMeter(AvgMeter):
         def measure(self, ctx: Any) -> float:
             return float(len(ctx.result))
 

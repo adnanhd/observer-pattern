@@ -349,7 +349,7 @@ Built-in observers:
 - `MetricsMeter` -- call counts, success/failure rates
 - `MemoryMeter` -- memory usage tracking
 - `CPUMeter` -- CPU usage tracking
-- `Meter` -- running averages (for training loops)
+- `AvgMeter` -- running averages (for training loops)
 - `LoggingReporter` -- structured logging
 
 The core primitive underneath is `Observable` / `Eventful` / `Dispatcher`
