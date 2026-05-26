@@ -52,12 +52,19 @@ def spawn_worker(port: int) -> subprocess.Popen:
     """
     return subprocess.Popen(
         [
-            sys.executable, "-m", "eventforge.worker",
-            "--import", "distributed_handlers",
-            "--service", SERVICE_NAME,
-            "--host", "127.0.0.1",
-            "--port", str(port),
-            "--log-level", "WARNING",
+            sys.executable,
+            "-m",
+            "eventforge.worker",
+            "--import",
+            "distributed_handlers",
+            "--service",
+            SERVICE_NAME,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "WARNING",
         ],
         env={**os.environ, "PYTHONPATH": ":".join(sys.path)},
     )
