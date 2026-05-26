@@ -16,7 +16,7 @@ class MemoryTransport(Transport):
     """Thread-safe in-memory message transport."""
 
     def __init__(self, max_queue_size: int = 1000):
-        self._queues: dict[str, Queue] = defaultdict(
+        self._queues: dict[str, Queue[Message]] = defaultdict(
             lambda: Queue(maxsize=max_queue_size)
         )
         self._subscribers: dict[str, Callable[[Message], None]] = {}

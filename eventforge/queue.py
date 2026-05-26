@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from typing import Any
+from typing import Any, overload
 from uuid import uuid4
 
 from eventforge.observers import BroadcastDispatcher, Dispatcher, Eventful, Observable
@@ -73,7 +73,17 @@ class MessageQueue(Observable):
 
     # ---- Observable surface (string-keyed routing) ---------------------
 
-    def on(self, event_or_topic: str, fn: Handler | None = None):
+    @overload
+    def on(self, event_or_topic: str, fn: Handler) -> str: ...
+
+    @overload
+    def on(
+        self, event_or_topic: str, fn: None = ...
+    ) -> Callable[[Handler], Handler]: ...
+
+    def on(
+        self, event_or_topic: str, fn: Handler | None = None
+    ) -> Callable[[Handler], Handler] | str:
         """Subscribe ``fn`` to ``event_or_topic``. Two forms:
 
         - ``queue.on("topic", handler)`` -- subscribe directly,
@@ -203,14 +213,14 @@ class MessageQueue(Observable):
 
     # ---- task helper ---------------------------------------------------
 
-    def register_task(self, topic: str, task_func: Callable) -> str:
+    def register_task(self, topic: str, task_func: Callable[..., Any]) -> str:
         """Subscribe a task function that auto-unpacks the message payload.
 
         Dict payload -> kwargs; list/tuple -> positional args; otherwise
         passed as a single arg.
         """
 
-        def handler(msg: Message):
+        def handler(msg: Message) -> Any:
             payload = msg.payload
             if isinstance(payload, dict):
                 return task_func(**payload)

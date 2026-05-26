@@ -37,7 +37,7 @@ from collections.abc import Callable
 from typing import Any
 
 try:
-    import logfire as _logfire
+    import logfire as _logfire  # type: ignore[import-not-found]
 except ImportError as e:  # pragma: no cover
     raise ImportError(
         "logfire is required for LogfireMeter. "

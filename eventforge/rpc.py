@@ -32,22 +32,24 @@ class RPCServer:
         self._queue = queue
         self._executor = executor or Executor()
         self._service_name = service_name
-        self._methods: dict[str, Callable] = {}
+        self._methods: dict[str, Callable[..., Any]] = {}
         self._running = False
         self._sub_id: str | None = None
         self._stop_event = threading.Event()
 
-    def register(self, name: str | None = None) -> Callable:
+    def register(
+        self, name: str | None = None
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Decorator to register RPC method."""
 
-        def decorator(func: Callable) -> Callable:
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             method_name = name or func.__name__
             self._methods[method_name] = func
             return func
 
         return decorator
 
-    def add_method(self, name: str, func: Callable) -> None:
+    def add_method(self, name: str, func: Callable[..., Any]) -> None:
         """Register method directly."""
         self._methods[name] = func
 
@@ -142,7 +144,7 @@ class RPCServer:
     def __enter__(self) -> "RPCServer":
         return self
 
-    def __exit__(self, *args) -> None:
+    def __exit__(self, *args: Any) -> None:
         self.stop()
 
 
@@ -159,7 +161,9 @@ class RPCClient:
         self._service_name = service_name
         self._timeout = timeout
 
-    def call(self, method: str, *args, timeout: float | None = None, **kwargs) -> Any:
+    def call(
+        self, method: str, *args: Any, timeout: float | None = None, **kwargs: Any
+    ) -> Any:
         """Call remote method synchronously."""
         request = RPCRequest(
             method=method, args=args, kwargs=kwargs, timeout=timeout or self._timeout
@@ -190,7 +194,7 @@ class RPCClient:
         return response.result
 
     async def call_async(
-        self, method: str, *args, timeout: float | None = None, **kwargs
+        self, method: str, *args: Any, timeout: float | None = None, **kwargs: Any
     ) -> Any:
         """Call remote method asynchronously."""
         request = RPCRequest(
@@ -221,10 +225,10 @@ class RPCClient:
 
         return response.result
 
-    def __getattr__(self, name: str) -> Callable:
+    def __getattr__(self, name: str) -> Callable[..., Any]:
         """Allow client.method_name(*args) syntax."""
 
-        def caller(*args, **kwargs):
+        def caller(*args: Any, **kwargs: Any) -> Any:
             return self.call(name, *args, **kwargs)
 
         return caller
@@ -260,11 +264,13 @@ class RoundRobinRPCClient:
             self._idx = (self._idx + 1) % len(self._clients)
         return client
 
-    def call(self, method: str, *args, timeout: float | None = None, **kwargs) -> Any:
+    def call(
+        self, method: str, *args: Any, timeout: float | None = None, **kwargs: Any
+    ) -> Any:
         return self._next_client().call(method, *args, timeout=timeout, **kwargs)
 
-    def __getattr__(self, name: str) -> Callable:
-        def caller(*args, **kwargs):
+    def __getattr__(self, name: str) -> Callable[..., Any]:
+        def caller(*args: Any, **kwargs: Any) -> Any:
             return self.call(name, *args, **kwargs)
 
         return caller
@@ -276,7 +282,7 @@ def with_retry(
     max_retries: int = 3,
     backoff_initial: float = 0.1,
     backoff_factor: float = 2.0,
-    retry_on: tuple[type, ...] = (TimeoutError, ConnectionError),
+    retry_on: tuple[type[BaseException], ...] = (TimeoutError, ConnectionError),
 ) -> "RPCClient":
     """Wrap ``client`` so each ``call()`` retries up to ``max_retries`` times.
 
@@ -287,7 +293,7 @@ def with_retry(
     else propagates immediately so application errors aren't masked.
     """
 
-    class _RetryingClient:
+    class _RetryingClient(RPCClient):
         def __init__(self) -> None:
             self._client = client
             self._max_retries = max_retries
@@ -295,7 +301,7 @@ def with_retry(
             self._backoff_factor = backoff_factor
             self._retry_on = retry_on
 
-        def call(self, method: str, *args, **kwargs) -> Any:
+        def call(self, method: str, *args: Any, **kwargs: Any) -> Any:
             delay = self._backoff_initial
             last_exc: BaseException | None = None
             for attempt in range(self._max_retries + 1):
@@ -311,10 +317,10 @@ def with_retry(
             assert last_exc is not None
             raise last_exc  # pragma: no cover
 
-        def __getattr__(self, name: str) -> Callable:
-            def caller(*args, **kwargs):
+        def __getattr__(self, name: str) -> Callable[..., Any]:
+            def caller(*args: Any, **kwargs: Any) -> Any:
                 return self.call(name, *args, **kwargs)
 
             return caller
 
-    return _RetryingClient()  # type: ignore[return-value]
+    return _RetryingClient()

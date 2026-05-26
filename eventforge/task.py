@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from eventforge.executor import ExecutionMode, Executor
@@ -16,6 +16,32 @@ logger = logging.getLogger(__name__)
 
 # Type alias for plain callback handlers passed via decorator kwargs.
 ContextHandler = Callable[[TaskContext], None]
+
+
+class TaskCallable(Protocol):
+    """The callable produced by the :func:`task` decorator.
+
+    It behaves like the wrapped function (``__call__``) but also carries
+    the :class:`TaskRunner` and its Observable surface, attached by the
+    decorator so callers can do ``my_task.success.on(handler)`` or inspect
+    ``my_task.pool.stats``.
+    """
+
+    _runner: "TaskRunner"
+    _task: bool
+    _topic: str
+    _executor: Executor
+    state: SharedState
+    pool: "TaskPool | None"
+    start: Eventful
+    success: Eventful
+    failure: Eventful
+    complete: Eventful
+    on: Callable[..., Any]
+    fire: Callable[..., Any]
+    subscribe: Callable[..., Any]
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 class TaskPool:
@@ -117,7 +143,7 @@ class TaskPool:
             self.acquired = self.pool.acquire(self.blocking, self.timeout)
             return self.acquired
 
-        def __exit__(self, *args) -> None:
+        def __exit__(self, *args: Any) -> None:
             if self.acquired:
                 self.pool.release()
 
@@ -168,7 +194,7 @@ class TaskRunner(Observable):
 
     def __init__(
         self,
-        func: Callable,
+        func: Callable[..., Any],
         topic: str,
         executor: Executor,
         queue: Any | None = None,  # MessageQueue, avoid circular import
@@ -228,7 +254,7 @@ class TaskRunner(Observable):
         self.instance_timeout = instance_timeout
         self.pool = TaskPool(max_instances) if max_instances else None
 
-    def run(self, *args, **kwargs) -> Any:
+    def run(self, *args: Any, **kwargs: Any) -> Any:
         """Execute task with full lifecycle.
 
         1. Acquire pool slot (if max_instances set)
@@ -257,7 +283,7 @@ class TaskRunner(Observable):
             if self.pool:
                 self.pool.release()
 
-    def _execute(self, args: tuple, kwargs: dict) -> Any:
+    def _execute(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         """Internal execution logic."""
         # 2. Create context. ``uuid4().hex`` is ~25% faster than ``str(uuid4())``
         # (skips the canonical 8-4-4-4-12 hyphenation pass) and still gives
@@ -357,7 +383,7 @@ def task(
     publish_result: bool = True,
     max_instances: int | None = None,
     instance_timeout: float | None = None,
-):
+) -> Callable[[Callable[..., Any]], TaskCallable]:
     """Decorator that creates a callable task with full lifecycle support.
 
     The decorated function can be:
@@ -409,7 +435,7 @@ def task(
         print(process_data.pool.stats)
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> TaskCallable:
         # Use default executor if none provided
         _executor = executor or Executor()
         _topic = topic or func.__name__
@@ -432,8 +458,7 @@ def task(
         # Register queue subscription if queue provided
         if queue is not None:
 
-            @queue.on(_topic)
-            def queue_handler(message: Message):
+            def queue_handler(message: Message) -> Any:
                 """Handle messages from queue by invoking the task."""
                 payload = message.payload
 
@@ -448,10 +473,14 @@ def task(
                     # Single value -> single arg
                     return runner.run(payload)
 
+            queue.on(_topic, queue_handler)
+
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def _wrapper(*args: Any, **kwargs: Any) -> Any:
             """Execute task with full lifecycle support."""
             return runner.run(*args, **kwargs)
+
+        wrapper = cast(TaskCallable, _wrapper)
 
         # Attach metadata for introspection
         wrapper._runner = runner

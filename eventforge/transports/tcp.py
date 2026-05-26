@@ -105,7 +105,7 @@ class TCPServerTransport(Transport):
         self._clients: list[socket.socket] = []
         self._subscribers: dict[str, Callable[[Message], None]] = {}
         self._topic_subs: dict[str, list[str]] = defaultdict(list)
-        self._queues: dict[str, Queue] = defaultdict(Queue)
+        self._queues: dict[str, Queue[Message]] = defaultdict(Queue)
         self._lock = threading.RLock()
 
     def start(self) -> None:
@@ -135,6 +135,7 @@ class TCPServerTransport(Transport):
         logger.info("TCP server closed")
 
     def _accept_loop(self) -> None:
+        assert self._server_sock is not None  # set by start() before this thread
         while self._running:
             try:
                 client, addr = self._server_sock.accept()
@@ -249,7 +250,7 @@ class TCPClientTransport(Transport):
         self._recv_thread: threading.Thread | None = None
         self._subscribers: dict[str, Callable[[Message], None]] = {}
         self._topic_subs: dict[str, list[str]] = defaultdict(list)
-        self._queues: dict[str, Queue] = defaultdict(Queue)
+        self._queues: dict[str, Queue[Message]] = defaultdict(Queue)
         self._lock = threading.RLock()
 
     def connect(self) -> None:
