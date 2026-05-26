@@ -4,7 +4,14 @@ import time
 
 import pytest
 
-from eventforge import Executor, MessageQueue, RPCClient, RPCServer
+from eventforge import (
+    Executor,
+    MessageQueue,
+    RPCClient,
+    RPCServer,
+    TimingMeter,
+    task,
+)
 
 
 class TestRPC:
@@ -208,3 +215,26 @@ class TestRPC:
             result = client.call("echo", "hello")
 
             assert result == "hello"
+
+    def test_task_handler_runs_with_server_side_observability(self):
+        # A @task-decorated function registered on an RPCServer runs ON the
+        # server (with its observers) when a client calls it by name.
+        queue = MessageQueue()
+        timing = TimingMeter()
+
+        @task(on_execute=[timing])
+        def predict(x: int) -> int:
+            return x * 2
+
+        server = RPCServer(queue, service_name="ml")
+        server.add_method("predict", predict)
+        server.serve(blocking=False)
+        time.sleep(0.1)
+
+        client = RPCClient(queue, service_name="ml", timeout=5.0)
+        try:
+            assert client.call("predict", 5) == 10
+            # Observers fired on the server side, around the real execution.
+            assert timing.stats["count"] >= 1
+        finally:
+            server.stop()

@@ -2,19 +2,14 @@
 
 Remote Procedure Call over message queue.
 
-RPC is the **remote request-reply** layer -- the network counterpart to the
-local [`LocalProcedureCaller`](executor.md). Both satisfy the
-[`Caller` protocol](executor.md#the-caller-protocol) and follow the same
-call-and-return shape; RPC just puts a `MessageQueue` (typically TCP-backed)
-between caller and callee:
+RPC is the **remote request-reply** layer: you register a function on an
+`RPCServer` and call it **by name** from an `RPCClient`. It puts a
+`MessageQueue` (typically TCP-backed) between client and server.
 
-```
-LocalProcedureCaller : RPCClient :: Local : Remote Procedure Call
-```
-
-Because `RPCClient` is a `Caller`, it can be passed to
-[`@task(caller=...)`](task.md) to dispatch a decorated function to a remote
-worker -- see [Running Task Logic Remotely](#running-task-logic-remotely).
+`RPCClient.call` takes a method-NAME string, not a callable: the function
+lives on the server. To run a `@task`-decorated function remotely, register
+it on a server and have the client call it by name -- see
+[Running Task Logic on a Server](#running-task-logic-on-a-server).
 
 ## Overview
 
@@ -74,26 +69,19 @@ client.call("multiply", 5, 6)
 client.multiply(5, 6)
 ```
 
-## Calling by Name or by Callable
+## Calling by Name
 
-`RPCClient.call(method, *args)` accepts `method` as either a name string
-**or** a callable. When given a callable, the client uses its `__name__` as
-the remote method name -- the callable's body is never run locally, it just
-supplies the name (a "reference implementation"):
+`RPCClient.call(method, *args)` takes `method` as a name **string** only --
+the name of a method registered on the server. The callable itself lives on
+the server; the client just names it:
 
 ```python
-def process_data(data):
-    return data.upper()          # reference impl; runs on the worker
-
-# These dispatch to the same remote method "process_data":
-client.call("process_data", "world")
-client.call(process_data, "world")   # uses process_data.__name__
+# The server registered "process_data"; the client calls it by that name.
+client.call("process_data", "world")   # -> runs process_data ON the server
 ```
 
-This is exactly how `RPCClient` satisfies the
-[`Caller` protocol](executor.md#the-caller-protocol) and why it works as
-`@task(caller=client)`: `@task` calls `caller.call(self.func, ...)`, and the
-`RPCClient` turns `self.func` into its `__name__` for remote dispatch.
+There is no callable-accepting form: `RPCClient.call` always takes a
+method-name string, and the function lives on the server.
 
 ## Custom Method Names
 
@@ -219,34 +207,35 @@ robust = with_retry(clients[0], max_retries=3, backoff_initial=0.1, backoff_fact
 result = robust.call("heavy_computation", 100000)
 ```
 
-## Running Task Logic Remotely
+## Running Task Logic on a Server
 
-`RPCClient` is how you dispatch a `@task`-decorated function to a remote
-worker. Because `RPCClient` is a [`Caller`](executor.md#the-caller-protocol),
-you pass it directly as `@task(caller=client)`: `@task` then calls
-`client.call(func, ...)`, the client dispatches by `func.__name__`, and the
-worker runs the registered function and returns the value. The local body is
-the reference implementation and is not executed locally.
+To run logic remotely, define the function **on the server** (where it
+actually executes) and call it **by name** from the client. The client is a
+plain `RPCClient.call("name", ...)` -- no `@task`, no stub, no callable
+passed across the wire.
 
 ```python
-from eventforge import task, MessageQueue, RPCClient
-from eventforge.transports.tcp import TCPClientTransport
+from eventforge import task, MessageQueue, RPCServer, RPCClient, TimingMeter
+from eventforge.transports.tcp import TCPServerTransport, TCPClientTransport
 
+# SERVER: define heavy_computation where it runs; @task gives it observability.
+@task(on_execute=[TimingMeter()])
+def heavy_computation(n):
+    return sum(i ** 2 for i in range(n))
+
+server_q = MessageQueue(transport=TCPServerTransport(host="0.0.0.0", port=9090))
+server = RPCServer(server_q, service_name="compute")
+server.add_method("heavy_computation", heavy_computation)   # or @server.register("heavy_computation")
+server.serve(blocking=False)
+
+# CLIENT: plain call by name -- runs heavy_computation ON the server.
 transport = TCPClientTransport(host="gpu-host", port=9090)
 transport.connect()
 client = RPCClient(MessageQueue(transport=transport), service_name="compute")
-
-@task(caller=client)
-def heavy_computation(n):
-    return sum(i ** 2 for i in range(n))   # reference impl; runs on the worker
-
-result = heavy_computation(100000)         # dispatched by name "heavy_computation"
+result = client.call("heavy_computation", 100000)
 ```
 
-Swap `caller=client` for `caller=LocalProcedureCaller()` and the identical
-function runs in-process instead. Register the matching function on the
-server side (by the same name the client calls). See
-[Task Decorator](task.md) and `examples/07_distributed_workers.py`.
+See [Task Decorator](task.md) and `examples/07_distributed_workers.py`.
 
 For a no-boilerplate server, point the generic worker entrypoint at a module
 exposing a `HANDLERS` dict:
@@ -255,6 +244,46 @@ exposing a `HANDLERS` dict:
 python -m eventforge.worker --import handlers --service compute --port 9090
 # handlers.py:  HANDLERS = {"heavy_computation": heavy_computation}
 ```
+
+## Observability of RPC Calls
+
+RPC itself has no built-in observability -- it just ships a request and
+returns a result. You add observability with [`@task`](task.md) on whichever
+side you care about:
+
+- **Server side (measure real execution):** register a `@task`-decorated
+  handler. Its observers fire on the server, around each real call, so you
+  measure the actual work.
+
+  ```python
+  from eventforge import task, RPCServer, TimingMeter
+
+  server_timing = TimingMeter()
+
+  @task(on_execute=[server_timing])
+  def heavy_computation(n):
+      return sum(i ** 2 for i in range(n))
+
+  server.add_method("heavy_computation", heavy_computation)
+  # server_timing.stats reflects on-server execution time.
+  ```
+
+- **Client side (measure round-trip):** wrap the `client.call(...)` in a
+  `@task`. Its observers measure the full request-reply latency, including
+  network and queueing.
+
+  ```python
+  from eventforge import task, TimingMeter
+
+  rtt_timing = TimingMeter()
+
+  @task(on_execute=[rtt_timing])
+  def call_heavy(n):
+      return client.call("heavy_computation", n)   # plain RPC call by name
+
+  call_heavy(100000)
+  # rtt_timing.stats reflects client-observed round-trip time.
+  ```
 
 ## API Reference
 
@@ -265,10 +294,10 @@ class RPCServer:
     def __init__(
         self,
         queue: MessageQueue,
-        executor: Optional[LocalProcedureCaller] = None,
+        executor: Optional[Executor] = None,
         service_name: str = "rpc",
     ):
-        """Create RPC server (executor defaults to a LocalProcedureCaller)."""
+        """Create RPC server (executor defaults to an Executor)."""
     
     def register(self, name: str = None) -> Callable:
         """Decorator to register RPC method."""
@@ -288,9 +317,8 @@ class RPCServer:
 
 ### RPCClient
 
-`RPCClient` satisfies the [`Caller` protocol](executor.md#the-caller-protocol)
-(its `call` is the `Caller.call` method), so it can be used as
-`@task(caller=client)`.
+`RPCClient.call` takes a method-name string, not a callable: the function
+lives on the server.
 
 ```python
 class RPCClient:
@@ -302,11 +330,10 @@ class RPCClient:
     ):
         """Create RPC client."""
 
-    def call(self, method: str | Callable, *args, timeout: float = None, **kwargs) -> Any:
-        """Call remote method synchronously.
+    def call(self, method: str, *args, timeout: float = None, **kwargs) -> Any:
+        """Call a remote method by name synchronously.
 
-        method may be a name string OR a callable; a callable's __name__ is
-        used as the remote method name (its body is not run locally).
+        method is the name (string) of a method registered on the server.
         """
 
     async def call_async(self, method: str, *args, timeout: float = None, **kwargs) -> Any:
@@ -412,13 +439,13 @@ print(order)
 ### Worker Pool
 
 ```python
-from eventforge import MessageQueue, RPCServer, LocalProcedureCaller, ExecutionMode
+from eventforge import MessageQueue, RPCServer, Executor, ExecutionMode
 import threading
 
 queue = MessageQueue()
-caller = LocalProcedureCaller(mode=ExecutionMode.PROCESS, max_workers=4)
+executor = Executor(mode=ExecutionMode.PROCESS, max_workers=4)
 
-server = RPCServer(queue, executor=caller, service_name="compute")
+server = RPCServer(queue, executor=executor, service_name="compute")
 
 @server.register()
 def heavy_computation(n: int) -> int:

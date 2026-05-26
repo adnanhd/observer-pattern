@@ -11,7 +11,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator
 
 if TYPE_CHECKING:
-    from eventforge.caller import Caller
+    from eventforge.executor import Executor
 
 
 class TaskStatus(str, Enum):
@@ -232,7 +232,7 @@ class TaskContext:
     # Execution info
     args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = field(default_factory=dict)
-    executor: Optional["Caller"] = None
+    executor: Optional["Executor"] = None
 
     # Timing
     start_time: float = 0.0

@@ -61,7 +61,7 @@ def _run_with_timing(
         }
 
 
-class LocalProcedureCaller:
+class Executor:
     """Unified task executor with multiple execution modes."""
 
     def __init__(
@@ -294,25 +294,9 @@ class LocalProcedureCaller:
             self._results[task_id] = result
             self._futures.pop(task_id, None)
 
-    def call(self, target: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        """Execute the callable ``target`` and return its unwrapped value.
-
-        Satisfies the :class:`~eventforge.caller.Caller` protocol; ``@task``
-        uses it to run the task body locally (inline / thread / process).
-        """
-        if not callable(target):
-            raise TypeError("LocalProcedureCaller.call needs a callable")
-        if self._mode == ExecutionMode.SEQUENTIAL:
-            return target(*args, **kwargs)
-        tid = self.submit(target, *args, **kwargs)
-        return self.result(tid).value
-
-    def __enter__(self) -> "LocalProcedureCaller":
+    def __enter__(self) -> "Executor":
         self.start()
         return self
 
     def __exit__(self, *args: Any) -> None:
         self.stop()
-
-
-Executor = LocalProcedureCaller  # deprecated alias; prefer LocalProcedureCaller
