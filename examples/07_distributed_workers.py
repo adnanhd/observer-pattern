@@ -18,7 +18,8 @@ example is the local rehearsal of the containerized topology in
 
 Run::
 
-    PYTHONPATH=/path/to/registry-pattern:examples python examples/07_distributed_workers.py
+    PYTHONPATH=/path/to/registry-pattern:examples \
+        python examples/07_distributed_workers.py
 """
 
 from __future__ import annotations
@@ -28,15 +29,13 @@ import subprocess
 import sys
 import time
 
+# Domain + handler + entrypoint contract (HANDLERS / SERVICE_NAME) live here.
+# Importing it also registers MLP in the ModelRegistry for the local serialize.
+from distributed_handlers import MLP, SERVICE_NAME  # noqa: E402
 from registry import serialize
 
 from eventforge import MessageQueue, RoundRobinRPCClient, RPCClient
 from eventforge.transports.tcp import TCPClientTransport
-
-# Domain + handler + entrypoint contract (HANDLERS / SERVICE_NAME) live here.
-# Importing it also registers MLP in the ModelRegistry for the local serialize.
-from distributed_handlers import MLP, SERVICE_NAME  # noqa: E402
-
 
 # =============================================================================
 # Worker entry -- spawned via the eventforge.worker entrypoint (no inlined src)

@@ -5,7 +5,8 @@ Single source of truth for the fleet: the registry, the model, and the
 also satisfies the ``eventforge.worker`` entrypoint contract
 (``HANDLERS`` + ``SERVICE_NAME``), so a worker is just::
 
-    python -m eventforge.worker --import distributed_handlers --service learner --port 19090
+    python -m eventforge.worker --import distributed_handlers \
+        --service learner --port 19090
 
 which is exactly how ``07_distributed_workers.py`` spawns its workers and
 exactly the shape ``deploy/topology/handlers.py`` bind-mounts into a

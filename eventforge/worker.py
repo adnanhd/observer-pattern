@@ -24,7 +24,8 @@ Contract for the imported module:
 Run::
 
     python -m eventforge.worker --import handlers --port 9090
-    python -m eventforge.worker --import handlers --service learner --host 0.0.0.0 --port 9090
+    python -m eventforge.worker --import handlers --service learner \
+        --host 0.0.0.0 --port 9090
 
 The transport is a length-prefixed JSON TCP socket with no auth/TLS --
 bind it on a trusted network (docker/k8s internal, HPC interconnect),
@@ -37,8 +38,7 @@ import argparse
 import importlib
 import logging
 import signal
-import sys
-from typing import Callable, Dict
+from collections.abc import Callable
 
 from eventforge import MessageQueue, RPCServer
 from eventforge.transports.tcp import TCPServerTransport
@@ -46,7 +46,9 @@ from eventforge.transports.tcp import TCPServerTransport
 logger = logging.getLogger("eventforge.worker")
 
 
-def _load_handlers(module_path: str) -> tuple[Dict[str, Callable], str | None]:
+def _load_handlers(
+    module_path: str,
+) -> tuple[dict[str, Callable[..., object]], str | None]:
     """Import ``module_path`` and return its ``(HANDLERS, SERVICE_NAME)``.
 
     Raises SystemExit with a clear message on the common failure modes
@@ -96,7 +98,7 @@ def serve(
     # docker stop / kubectl delete send SIGTERM; serve() only unblocks on
     # its stop-event (or SIGINT). Bridge SIGTERM -> server.stop() so the
     # container exits cleanly instead of being SIGKILL'd after the grace period.
-    def _shutdown(signum, _frame):
+    def _shutdown(signum: int, _frame: object) -> None:
         logger.info("worker: received signal %s, stopping", signum)
         server.stop()
 
@@ -136,8 +138,12 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="RPC service name (default: module's SERVICE_NAME, else 'rpc')",
     )
-    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=9090, help="TCP port (default 9090)")
+    parser.add_argument(
+        "--host", default="0.0.0.0", help="Bind address (default 0.0.0.0)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=9090, help="TCP port (default 9090)"
+    )
     parser.add_argument(
         "--log-level",
         default="INFO",
