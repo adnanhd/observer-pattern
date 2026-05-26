@@ -1,0 +1,34 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+# Apptainer/Singularity twin of deploy/Dockerfile, for HPC interconnects
+# where the eventforge servers run as compute-node jobs and the demander
+# runs on the login node (or another job).
+#
+# Build (needs the repo as build context -- run from the repo root):
+#   apptainer build eventforge.sif deploy/apptainer/eventforge.def
+#
+# Run a server:
+#   PYTHONPATH=$PWD/deploy/topology \
+#   apptainer run eventforge.sif --import handlers --service math --port 9090
+#
+# Run the demander:
+#   apptainer exec eventforge.sif python deploy/topology/demander.py
+
+%files
+    . /opt/eventforge
+
+%post
+    cd /opt/eventforge
+    pip install --no-cache-dir .
+
+%environment
+    export PYTHONUNBUFFERED=1
+
+%runscript
+    exec python -m eventforge.worker "$@"
+
+%labels
+    Title eventforge
+    Source https://github.com/adnanhd/observer-pattern
+    Description RPC server-worker node for eventforge-network topologies
