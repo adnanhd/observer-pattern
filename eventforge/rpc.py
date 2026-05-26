@@ -163,20 +163,14 @@ class RPCClient:
 
     def call(
         self,
-        method: str | Callable[..., Any],
+        method: str,
         *args: Any,
         timeout: float | None = None,
         **kwargs: Any,
     ) -> Any:
-        """Call remote method synchronously.
-
-        ``method`` may be a method-name string or a callable, in which case
-        its ``__name__`` is used as the remote method name. The callable's
-        body is never executed locally -- it serves as the reference impl.
-        """
-        name = method.__name__ if callable(method) else method
+        """Call a remote method by name synchronously."""
         request = RPCRequest(
-            method=name, args=args, kwargs=kwargs, timeout=timeout or self._timeout
+            method=method, args=args, kwargs=kwargs, timeout=timeout or self._timeout
         )
 
         reply_topic = f"_rpc_reply.{request.id}"
@@ -195,7 +189,7 @@ class RPCClient:
             reply_topic, timeout=timeout or self._timeout
         )
         if not response_msg:
-            raise TimeoutError(f"RPC call to {name} timed out")
+            raise TimeoutError(f"RPC call to {method} timed out")
 
         response = RPCResponse.model_validate(response_msg.payload)
         if response.error:
@@ -276,7 +270,7 @@ class RoundRobinRPCClient:
 
     def call(
         self,
-        method: str | Callable[..., Any],
+        method: str,
         *args: Any,
         timeout: float | None = None,
         **kwargs: Any,
@@ -315,9 +309,7 @@ def with_retry(
             self._backoff_factor = backoff_factor
             self._retry_on = retry_on
 
-        def call(
-            self, method: str | Callable[..., Any], *args: Any, **kwargs: Any
-        ) -> Any:
+        def call(self, method: str, *args: Any, **kwargs: Any) -> Any:
             delay = self._backoff_initial
             last_exc: BaseException | None = None
             for attempt in range(self._max_retries + 1):

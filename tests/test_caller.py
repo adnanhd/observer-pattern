@@ -12,6 +12,7 @@ from eventforge import (
     MessageQueue,
     RPCClient,
     RPCServer,
+    TimingMeter,
     task,
 )
 
@@ -46,33 +47,26 @@ def test_call_non_callable_raises_type_error() -> None:
         lpc.call("not-callable")
 
 
-def test_rpc_client_is_caller() -> None:
-    client = RPCClient(MessageQueue(), service_name="x")
-    assert isinstance(client, Caller)
-
-
-def test_task_dispatches_by_name_to_remote() -> None:
+def test_task_fn_registered_on_server_runs_with_observability() -> None:
+    # The recommended remote pattern: a @task-decorated function registered
+    # on an RPCServer runs ON the server (with its observers) when a client
+    # calls it by name. No client-side stub, no duplication.
     queue = MessageQueue()
+    timing = TimingMeter()
+
+    @task(on_execute=[timing])
+    def predict(x: int) -> int:
+        return x * 2
+
     server = RPCServer(queue, service_name="ml")
-
-    @server.register("predict")
-    def server_predict(x: int) -> int:
-        # The server computes a distinctive value so we can prove the
-        # remote method ran rather than the local stub body.
-        return x * 100
-
+    server.add_method("predict", predict)
     server.serve(blocking=False)
     time.sleep(0.1)
 
     client = RPCClient(queue, service_name="ml", timeout=5.0)
-
-    @task(caller=client)
-    def predict(x: int) -> int:
-        # Stub body -- never executed; the remote "predict" runs instead.
-        return -1
-
     try:
-        result = predict(5)
-        assert result == 500
+        assert client.call("predict", 5) == 10
+        # Observers fired on the server side, around the real execution.
+        assert timing.stats["count"] >= 1
     finally:
         server.stop()

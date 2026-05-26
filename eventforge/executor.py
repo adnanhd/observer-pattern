@@ -294,12 +294,11 @@ class LocalProcedureCaller:
             self._results[task_id] = result
             self._futures.pop(task_id, None)
 
-    def call(self, target: Callable[..., Any] | str, *args: Any, **kwargs: Any) -> Any:
-        """Execute ``target`` and return its unwrapped value.
+    def call(self, target: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Execute the callable ``target`` and return its unwrapped value.
 
-        Satisfies the :class:`~eventforge.caller.Caller` protocol so a
-        ``LocalProcedureCaller`` can be used interchangeably with an
-        :class:`~eventforge.rpc.RPCClient` by ``@task``.
+        Satisfies the :class:`~eventforge.caller.Caller` protocol; ``@task``
+        uses it to run the task body locally (inline / thread / process).
         """
         if not callable(target):
             raise TypeError("LocalProcedureCaller.call needs a callable")
