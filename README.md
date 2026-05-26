@@ -312,10 +312,8 @@ result = client.call("predict", 2)         # 4 -- runs predict ON the server, ob
 So `@task` always runs the body in-process and `executor=` only picks the
 in-process mode (inline / thread / process). For remote work, register the
 function on an `RPCServer` (or `python -m eventforge.worker`, see
-[Deployment](#deployment)) and call it by name. RPC has no built-in
-observability; add it with `@task` on the side you care about -- the server
-handler (to measure real execution) or a `@task` wrapping `client.call(...)`
-(to measure round-trip).
+[Deployment](#deployment)) and call it by name. Registering a `@task`
+handler keeps its observers running around the on-server execution.
 
 ## Observers
 
