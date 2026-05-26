@@ -364,7 +364,7 @@ class ExecutionContext:
 @task(
     queue=None,
     topic=None,                # defaults to function name
-    caller=None,               # LocalProcedureCaller by default
+    executor=None,             # Executor by default
     on_execute=None,           # list of Meters / objects with on_<event> methods
     on_success=None,           # Callable[[TaskContext], None]
     on_failure=None,

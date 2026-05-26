@@ -1,21 +1,21 @@
 # Task Decorator
 
-The `@task` decorator is a **facade**: it composes a
-[`Caller`](executor.md#the-caller-protocol), an optional
+The `@task` decorator composes an [`Executor`](executor.md), an optional
 [`MessageQueue`](queue.md), and [observers](observers.md) into a single
-callable with full lifecycle support. It is not a layer of its own -- it
-wires the existing pieces together so you do not have to by hand.
+callable with full lifecycle support. It wires the existing pieces together
+so you do not have to by hand.
 
-The `caller=` parameter decides *where* the work runs: a
-[`LocalProcedureCaller`](executor.md) (the default) runs the function body
-in-process, while an [`RPCClient`](rpc.md) dispatches the same function to a
-remote worker by name. (`executor=` is accepted as a deprecated alias for
-`caller=`.)
+`@task` runs the function body **locally**: the `executor=` parameter is an
+[`Executor`](executor.md) (sequential by default) and decides *how* the body
+runs in-process -- inline, in a thread pool, or in a process pool. For remote
+execution you register a function on an [`RPCServer`](rpc.md) and call it by
+name -- see
+[Running Logic on a Remote Worker](#running-logic-on-a-remote-worker).
 
 ## Overview
 
 ```python
-from eventforge import task, MessageQueue, LocalProcedureCaller, TimingMeter
+from eventforge import task, MessageQueue, TimingMeter
 
 queue = MessageQueue()
 timing = TimingMeter()
@@ -132,9 +132,8 @@ Disable with `publish_result=False`.
 @task(
     queue=None,           # MessageQueue for pub-sub integration
     topic=None,           # Topic name (defaults to function name)
-    caller=None,          # Caller: LocalProcedureCaller (local, default) or
-                          #   RPCClient (remote dispatch by func.__name__)
-    executor=None,        # Deprecated alias for caller
+    executor=None,        # Executor (default) -- how the body runs
+                          #   in-process (inline / thread / process)
     on_execute=None,      # List of Observer instances
     on_success=None,      # Callable[[TaskContext], None]
     on_failure=None,      # Callable[[TaskContext], None]
@@ -151,8 +150,7 @@ Disable with `publish_result=False`.
 |-----------|------|---------|-------------|
 | `queue` | `MessageQueue` | `None` | Queue for pub-sub. If provided with topic, subscribes automatically |
 | `topic` | `str` | Function name | Topic for queue subscription and result publishing |
-| `caller` | `Caller` | `LocalProcedureCaller()` | Where the work runs: a `LocalProcedureCaller` runs the body locally; an `RPCClient` dispatches it to a remote worker by `func.__name__` |
-| `executor` | `Caller` | `None` | Deprecated alias for `caller` |
+| `executor` | `Executor` | `Executor()` | Local execution backend: how the body runs in-process (inline / thread / process) |
 | `on_execute` | `List[Observer]` | `[]` | Observers called on start/end/error |
 | `on_success` | `Callable` | `None` | Called on successful execution |
 | `on_failure` | `Callable` | `None` | Called on failed execution |
@@ -170,8 +168,7 @@ def my_func(x):
 
 my_func._task       # True
 my_func._topic      # "my.task"
-my_func._caller     # the Caller (LocalProcedureCaller or RPCClient)
-my_func._executor   # deprecated alias for _caller (same object)
+my_func._executor   # the Executor
 my_func._runner     # TaskRunner instance
 my_func.state       # SharedState instance
 ```
@@ -218,7 +215,7 @@ class TaskContext:
     topic: Optional[str]            # Queue topic
     args: tuple                     # Positional arguments
     kwargs: Dict[str, Any]          # Keyword arguments
-    executor: Optional[Caller]      # the resolved Caller (kept name; was executor=)
+    executor: Optional[Executor]    # the resolved Executor
     start_time: float               # Start timestamp
     end_time: float                 # End timestamp
     result: Any                     # Return value
@@ -270,70 +267,59 @@ queue.publish("my.task", [1, 2, 3])  # my_task(1, 2, 3)
 queue.publish("my.task", 42)  # my_task(42) - would fail here, needs 2 args
 ```
 
-## Caller Integration (local execution modes)
+## Executor Integration (local execution modes)
 
-Run tasks with different local execution modes by passing a
-`LocalProcedureCaller` as `caller=`:
+Run tasks with different local execution modes by passing an `Executor` as
+`executor=`:
 
 ```python
-from eventforge import LocalProcedureCaller, ExecutionMode
+from eventforge import Executor, ExecutionMode
 
 # Thread-based for I/O-bound tasks
-thread_caller = LocalProcedureCaller(mode=ExecutionMode.THREAD, max_workers=4)
+thread_executor = Executor(mode=ExecutionMode.THREAD, max_workers=4)
 
-@task(caller=thread_caller)
+@task(executor=thread_executor)
 def fetch_url(url):
     # I/O-bound work
     pass
 
 # Process-based for CPU-bound tasks
-process_caller = LocalProcedureCaller(mode=ExecutionMode.PROCESS, max_workers=4)
+process_executor = Executor(mode=ExecutionMode.PROCESS, max_workers=4)
 
-@task(caller=process_caller)
+@task(executor=process_executor)
 def compute_heavy(data):
     # CPU-bound work
     pass
 ```
 
-`executor=` is still accepted as a deprecated alias
-(`@task(executor=thread_caller)`), but prefer `caller=`.
+## Running Logic on a Remote Worker
 
-## Running the Same Work Remotely
-
-Because `caller=` takes any [`Caller`](executor.md#the-caller-protocol), and
-[`RPCClient`](rpc.md) is a `Caller`, running the *same* function remotely is
-a one-parameter flip:
-
-```
-@task(caller=LocalProcedureCaller())   # runs the body in-process
-@task(caller=RPCClient(...))           # dispatches to a remote worker by name
-```
-
-When the `caller` is an `RPCClient`, `@task`'s run path is
-`caller.call(self.func, ...)` -- the `RPCClient` takes the function, uses its
-`__name__` as the remote method name, and dispatches the request to the
-worker. The decorated body is the **reference implementation** and is not
-executed locally. Expose the matching function on a worker via [RPC](rpc.md)
-(`RPCServer.register`, or `python -m eventforge.worker`):
+`@task` runs the body in-process. To run logic remotely, you define the
+function **on the server** (where it actually runs) and call it **by name**
+from a client with [RPC](rpc.md). The client needs no `@task` and no stub.
 
 ```python
-from eventforge import task, MessageQueue, RPCClient
-from eventforge.transports.tcp import TCPClientTransport
+from eventforge import task, MessageQueue, RPCServer, RPCClient, TimingMeter
 
-transport = TCPClientTransport(host="gpu-host", port=9090)
-transport.connect()
-remote = RPCClient(MessageQueue(transport=transport), service_name="data")
+# SERVER: define the function once, where it runs. @task gives it observability.
+@task(on_execute=[TimingMeter()])
+def predict(x):
+    return x * 2
 
-@task(caller=remote)
-def compute_heavy(payload):
-    return process(payload)        # reference impl; runs on the worker, not here
+queue = MessageQueue()
+server = RPCServer(queue, service_name="ml")
+server.add_method("predict", predict)     # or: @server.register("predict")
+server.serve(blocking=False)
 
-# Calling the task dispatches to the worker by name "compute_heavy".
-result = compute_heavy(payload)
+# CLIENT: plain call, no @task, no stub -- runs predict ON the server.
+client = RPCClient(queue, service_name="ml")
+result = client.call("predict", 2)        # 4, with the server's observers firing
 ```
 
-See [RPC](rpc.md) and the distributed worker pool in
-[Remote Queue](remote.md) / `examples/07_distributed_workers.py`.
+Because `predict` is a `@task`, its observers fire on the server around each
+real execution. See [Observability of RPC Calls](rpc.md#observability-of-rpc-calls)
+for measuring round-trip latency on the client side, plus the distributed
+worker pool in [Remote Queue](remote.md) / `examples/07_distributed_workers.py`.
 
 ## Examples
 

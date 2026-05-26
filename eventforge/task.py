@@ -8,8 +8,7 @@ from collections.abc import Callable
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from eventforge.caller import Caller
-from eventforge.executor import LocalProcedureCaller
+from eventforge.executor import ExecutionMode, Executor
 from eventforge.observers import Eventful, Meter, Observable
 from eventforge.types import Message, SharedState, TaskContext
 
@@ -31,8 +30,7 @@ class TaskCallable(Protocol):
     _runner: "TaskRunner"
     _task: bool
     _topic: str
-    _executor: Caller
-    _caller: Caller
+    _executor: Executor
     state: SharedState
     pool: "TaskPool | None"
     start: Eventful
@@ -171,7 +169,8 @@ class TaskRunner(Observable):
     Args:
         func: The function to execute
         topic: Topic name for queue integration
-        caller: Caller used to dispatch the function (local or RPC)
+        executor: Executor used to run the function locally (sequential /
+            thread / process)
         queue: Optional MessageQueue for pub-sub
         on_execute: Observers with on_start/on_success/on_failure lifecycle methods
         on_success: Callback called on success (receives TaskContext)
@@ -185,7 +184,7 @@ class TaskRunner(Observable):
         runner = TaskRunner(
             func=my_func,
             topic="my.topic",
-            caller=LocalProcedureCaller(),
+            executor=Executor(),
             max_instances=3,
             on_execute=[TimingMeter()],
             on_success=lambda ctx: print(f"Done: {ctx.result}"),
@@ -198,7 +197,7 @@ class TaskRunner(Observable):
         self,
         func: Callable[..., Any],
         topic: str,
-        caller: Caller | None = None,
+        executor: Executor | None = None,
         queue: Any | None = None,  # MessageQueue, avoid circular import
         on_execute: list[Any] | None = None,
         on_start: ContextHandler | None = None,
@@ -208,16 +207,10 @@ class TaskRunner(Observable):
         publish_result: bool = True,
         max_instances: int | None = None,
         instance_timeout: float | None = None,
-        executor: Caller | None = None,  # deprecated alias for ``caller``
     ):
-        resolved = caller or executor
-        if resolved is None:
-            raise TypeError("TaskRunner requires a 'caller' (or 'executor')")
         self.func = func
         self.topic = topic
-        self._caller = resolved
-        # ``executor`` kept as a back-compat alias referencing the same caller.
-        self.executor = resolved
+        self.executor = executor or Executor()
         self.queue = queue
         self.publish_result = publish_result
         self.state = SharedState()
@@ -268,7 +261,7 @@ class TaskRunner(Observable):
         1. Acquire pool slot (if max_instances set)
         2. Create TaskContext
         3. Call on_execute observers (on_start)
-        4. Execute function via executor
+        4. Execute the function locally via the Executor
         5. Call on_success/on_failure observers
         6. Call on_complete handler
         7. Publish result to queue (optional)
@@ -320,10 +313,13 @@ class TaskRunner(Observable):
         self.start.fire(ctx)
 
         try:
-            # Uniform dispatch: a LocalProcedureCaller runs the body, while an
-            # RPCClient dispatches to the remote method named ``func.__name__``
-            # (the local body is the reference impl, not executed remotely).
-            ctx.result = self._caller.call(self.func, *args, **kwargs)
+            # Run the body locally via the Executor: inline in SEQUENTIAL mode,
+            # otherwise submit to the thread / process pool and wait.
+            if self.executor.mode == ExecutionMode.SEQUENTIAL:
+                ctx.result = self.func(*args, **kwargs)
+            else:
+                task_id = self.executor.submit(self.func, *args, **kwargs)
+                ctx.result = self.executor.result(task_id).value
         except Exception as e:
             ctx.error = e
             ctx.end_time = time.time()
@@ -379,8 +375,7 @@ class TaskRunner(Observable):
 def task(
     queue: Any | None = None,
     topic: str | None = None,
-    caller: Caller | None = None,
-    executor: Caller | None = None,
+    executor: Executor | None = None,
     on_execute: list[Any] | None = None,
     on_success: ContextHandler | None = None,
     on_failure: ContextHandler | None = None,
@@ -396,14 +391,15 @@ def task(
     - Triggered via queue: queue.publish(topic, args)
 
     Both paths use the same execution engine with full observer support.
+    The body always runs locally via the Executor; to run it remotely,
+    register the decorated function on an ``RPCServer`` and call it by name
+    with ``RPCClient.call("name", ...)``.
 
     Args:
         queue: MessageQueue instance for pub-sub integration
         topic: Topic name for queue subscription (defaults to function name)
-        caller: Caller used to dispatch the function -- a LocalProcedureCaller
-            (default) runs it in-process, an RPCClient dispatches it to a
-            remote worker by function name
-        executor: Deprecated alias for ``caller`` (kept for back-compat)
+        executor: Executor that runs the function locally -- sequential
+            (default, inline), thread, or process mode
         on_execute: List of observers to hook into execution lifecycle
         on_success: Handler called on successful execution (receives TaskContext)
         on_failure: Handler called on failed execution (receives TaskContext)
@@ -413,16 +409,16 @@ def task(
         instance_timeout: Timeout in seconds waiting for slot (None = forever)
 
     Example:
-        from eventforge import task, MessageQueue, LocalProcedureCaller, TimingMeter
+        from eventforge import task, MessageQueue, Executor, ExecutionMode, TimingMeter
 
         queue = MessageQueue()
-        caller = LocalProcedureCaller(mode=ExecutionMode.THREAD)
+        executor = Executor(mode=ExecutionMode.THREAD)
         timing = TimingMeter()
 
         @task(
             queue=queue,
             topic="process.data",
-            caller=caller,
+            executor=executor,
             max_instances=3,  # Only 3 concurrent executions
             on_execute=[timing],
             on_success=lambda ctx: print(f"Done: {ctx.result}"),
@@ -444,16 +440,16 @@ def task(
     """
 
     def decorator(func: Callable[..., Any]) -> TaskCallable:
-        # Resolve the caller once: explicit caller wins, then the deprecated
-        # executor alias, else a default in-process LocalProcedureCaller.
-        resolved: Caller = caller or executor or LocalProcedureCaller()
+        # Resolve the executor once: explicit executor, else a default
+        # in-process (sequential) Executor.
+        resolved: Executor = executor or Executor()
         _topic = topic or func.__name__
 
         # Create runner
         runner = TaskRunner(
             func=func,
             topic=_topic,
-            caller=resolved,
+            executor=resolved,
             queue=queue,
             on_execute=on_execute,
             on_success=on_success,
@@ -495,8 +491,7 @@ def task(
         wrapper._runner = runner
         wrapper._task = True
         wrapper._topic = _topic
-        wrapper._caller = resolved
-        wrapper._executor = resolved  # deprecated alias; prefer ``_caller``
+        wrapper._executor = resolved
 
         # Expose state for external access
         wrapper.state = runner.state

@@ -7,8 +7,7 @@ emit events; Reporters subscribe to Meter emissions and ship them
 externally (logging, syslog, OpenTelemetry, ...).
 """
 
-from eventforge.caller import Caller
-from eventforge.executor import ExecutionMode, Executor, LocalProcedureCaller
+from eventforge.executor import ExecutionMode, Executor
 from eventforge.observers import (
     BroadcastDispatcher,
     ConcurrentDispatcher,
@@ -75,9 +74,7 @@ __all__ = [
     "RemoteQueue",
     "WorkQueue",
     "QueueFullError",
-    # Executor / Caller
-    "LocalProcedureCaller",
-    "Caller",
+    # Executor
     "Executor",
     "ExecutionMode",
     # Task
