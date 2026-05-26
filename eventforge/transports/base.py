@@ -1,7 +1,7 @@
 """Abstract transport interface."""
 
 from abc import ABC, abstractmethod
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from eventforge.types import Message
 
@@ -15,14 +15,14 @@ class Transport(ABC):
         pass
 
     @abstractmethod
-    def receive(self, topic: str, timeout: Optional[float] = None) -> Optional[Message]:
+    def receive(self, topic: str, timeout: float | None = None) -> Message | None:
         """Receive next message from topic (blocking)."""
         pass
 
     @abstractmethod
     async def receive_async(
-        self, topic: str, timeout: Optional[float] = None
-    ) -> Optional[Message]:
+        self, topic: str, timeout: float | None = None
+    ) -> Message | None:
         """Receive next message from topic (async)."""
         pass
 

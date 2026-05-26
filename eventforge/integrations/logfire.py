@@ -33,7 +33,8 @@ other built-in meters (TimingMeter, MemoryMeter, ...).
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable, Dict, List, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 try:
     import logfire as _logfire
@@ -43,7 +44,7 @@ except ImportError as e:  # pragma: no cover
         "Install it with: pip install eventforge[logfire]"
     ) from e
 
-from eventforge.observers import Context, ExecutionContext, Meter
+from eventforge.observers import Context, Meter
 
 
 class LogfireMeter(Meter):
@@ -78,12 +79,12 @@ class LogfireMeter(Meter):
 
     def __init__(
         self,
-        logfire_instance: Optional[Any] = None,
-        span_name: Union[str, Callable[[Context], str], None] = None,
-        extract_attributes: Optional[Callable[[Context], Dict[str, Any]]] = None,
+        logfire_instance: Any | None = None,
+        span_name: str | Callable[[Context], str] | None = None,
+        extract_attributes: Callable[[Context], dict[str, Any]] | None = None,
         log_args: bool = False,
         log_result: bool = False,
-        tags: Optional[List[str]] = None,
+        tags: list[str] | None = None,
     ) -> None:
         super().__init__()
         self._logfire = logfire_instance or _logfire
@@ -95,7 +96,7 @@ class LogfireMeter(Meter):
         # Open spans keyed by id(ctx); a task's lifecycle is on one
         # thread per call, but multiple concurrent tasks each need
         # their own span entry. id(ctx) is unique per call.
-        self._active_spans: Dict[int, Any] = {}
+        self._active_spans: dict[int, Any] = {}
         self._lock = threading.Lock()
 
     def _resolve_name(self, ctx: Context) -> str:
@@ -111,7 +112,7 @@ class LogfireMeter(Meter):
         return self._logfire
 
     def on_start(self, ctx: Context) -> None:
-        attrs: Dict[str, Any] = {}
+        attrs: dict[str, Any] = {}
         if self._log_args:
             args = getattr(ctx, "args", ())
             kwargs = getattr(ctx, "kwargs", {})
@@ -186,9 +187,9 @@ class LogfireMetricLogger:
 
     def __init__(
         self,
-        logfire_instance: Optional[Any] = None,
+        logfire_instance: Any | None = None,
         prefix: str = "metrics",
-        tags: Optional[List[str]] = None,
+        tags: list[str] | None = None,
     ) -> None:
         handle = logfire_instance or _logfire
         if tags:

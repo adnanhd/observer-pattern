@@ -1,6 +1,5 @@
 """Tests for eventforge.rpc module."""
 
-import threading
 import time
 
 import pytest

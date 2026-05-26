@@ -21,8 +21,8 @@ import socket
 import struct
 import threading
 from collections import defaultdict
+from collections.abc import Callable
 from queue import Empty, Queue
-from typing import Callable, Dict, List, Optional
 from uuid import uuid4
 
 from eventforge.transports.base import Transport
@@ -39,7 +39,7 @@ def _send_msg(sock: socket.socket, data: bytes) -> None:
     sock.sendall(struct.pack(_HEADER_FMT, len(data)) + data)
 
 
-def _recv_exact(sock: socket.socket, n: int) -> Optional[bytes]:
+def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
     """Receive exactly n bytes. Returns None on disconnect."""
     chunks: list[bytes] = []
     remaining = n
@@ -52,7 +52,7 @@ def _recv_exact(sock: socket.socket, n: int) -> Optional[bytes]:
     return b"".join(chunks)
 
 
-def _recv_msg(sock: socket.socket) -> Optional[bytes]:
+def _recv_msg(sock: socket.socket) -> bytes | None:
     """Receive a length-prefixed message. Returns None on disconnect."""
     header = _recv_exact(sock, _HEADER_SIZE)
     if header is None:
@@ -99,13 +99,13 @@ class TCPServerTransport(Transport):
     def __init__(self, host: str = "127.0.0.1", port: int = 9090) -> None:
         self._host = host
         self._port = port
-        self._server_sock: Optional[socket.socket] = None
+        self._server_sock: socket.socket | None = None
         self._running = False
-        self._accept_thread: Optional[threading.Thread] = None
-        self._clients: List[socket.socket] = []
-        self._subscribers: Dict[str, Callable[[Message], None]] = {}
-        self._topic_subs: Dict[str, List[str]] = defaultdict(list)
-        self._queues: Dict[str, Queue] = defaultdict(Queue)
+        self._accept_thread: threading.Thread | None = None
+        self._clients: list[socket.socket] = []
+        self._subscribers: dict[str, Callable[[Message], None]] = {}
+        self._topic_subs: dict[str, list[str]] = defaultdict(list)
+        self._queues: dict[str, Queue] = defaultdict(Queue)
         self._lock = threading.RLock()
 
     def start(self) -> None:
@@ -144,7 +144,7 @@ class TCPServerTransport(Transport):
                 threading.Thread(
                     target=self._client_loop, args=(client,), daemon=True
                 ).start()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break
@@ -193,15 +193,15 @@ class TCPServerTransport(Transport):
                 except Exception:
                     self._clients.remove(sock)
 
-    def receive(self, topic: str, timeout: Optional[float] = None) -> Optional[Message]:
+    def receive(self, topic: str, timeout: float | None = None) -> Message | None:
         try:
             return self._queues[topic].get(timeout=timeout)
         except Empty:
             return None
 
     async def receive_async(
-        self, topic: str, timeout: Optional[float] = None
-    ) -> Optional[Message]:
+        self, topic: str, timeout: float | None = None
+    ) -> Message | None:
         loop = asyncio.get_event_loop()
         try:
             return await asyncio.wait_for(
@@ -244,12 +244,12 @@ class TCPClientTransport(Transport):
     def __init__(self, host: str = "localhost", port: int = 9090) -> None:
         self._host = host
         self._port = port
-        self._socket: Optional[socket.socket] = None
+        self._socket: socket.socket | None = None
         self._running = False
-        self._recv_thread: Optional[threading.Thread] = None
-        self._subscribers: Dict[str, Callable[[Message], None]] = {}
-        self._topic_subs: Dict[str, List[str]] = defaultdict(list)
-        self._queues: Dict[str, Queue] = defaultdict(Queue)
+        self._recv_thread: threading.Thread | None = None
+        self._subscribers: dict[str, Callable[[Message], None]] = {}
+        self._topic_subs: dict[str, list[str]] = defaultdict(list)
+        self._queues: dict[str, Queue] = defaultdict(Queue)
         self._lock = threading.RLock()
 
     def connect(self) -> None:
@@ -305,15 +305,15 @@ class TCPClientTransport(Transport):
             raise ConnectionError("Not connected — call connect() first")
         _send_msg(self._socket, _serialize(message))
 
-    def receive(self, topic: str, timeout: Optional[float] = None) -> Optional[Message]:
+    def receive(self, topic: str, timeout: float | None = None) -> Message | None:
         try:
             return self._queues[topic].get(timeout=timeout)
         except Empty:
             return None
 
     async def receive_async(
-        self, topic: str, timeout: Optional[float] = None
-    ) -> Optional[Message]:
+        self, topic: str, timeout: float | None = None
+    ) -> Message | None:
         loop = asyncio.get_event_loop()
         try:
             return await asyncio.wait_for(

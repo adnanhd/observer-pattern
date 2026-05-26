@@ -2,18 +2,17 @@
 
 import asyncio
 import logging
-import multiprocessing as mp
 import os
 import threading
 import time
+from collections.abc import Callable, Iterable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from enum import Enum
-from queue import Queue
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any
 from uuid import uuid4
 
-from eventforge.types import TaskRequest, TaskResult, TaskStatus
+from eventforge.types import TaskResult, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +27,7 @@ class ExecutionMode(str, Enum):
 
 def _run_with_timing(
     task_id: str, func: Callable, args: tuple, kwargs: dict
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Worker entry: time the call and return a structured result.
 
     Submitted directly to ProcessPoolExecutor, which pickles ``func`` /
@@ -69,8 +68,8 @@ class Executor:
     ):
         self._mode = mode
         self._max_workers = max_workers
-        self._results: Dict[str, TaskResult] = {}
-        self._futures: Dict[str, Future] = {}
+        self._results: dict[str, TaskResult] = {}
+        self._futures: dict[str, Future] = {}
         self._lock = threading.RLock()
         self._pool = None
         self._running = False
@@ -111,7 +110,7 @@ class Executor:
         func: Callable,
         *args,
         priority: int = 0,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
         **kwargs,
     ) -> str:
         """Submit task for execution. Returns task_id."""
@@ -150,7 +149,7 @@ class Executor:
             None, lambda: self.submit(func, *args, **kwargs)
         )
 
-    def result(self, task_id: str, timeout: Optional[float] = None) -> TaskResult:
+    def result(self, task_id: str, timeout: float | None = None) -> TaskResult:
         """Get task result (blocking)."""
         deadline = time.time() + timeout if timeout else None
 
@@ -197,22 +196,22 @@ class Executor:
             time.sleep(0.01)
 
     async def result_async(
-        self, task_id: str, timeout: Optional[float] = None
+        self, task_id: str, timeout: float | None = None
     ) -> TaskResult:
         """Get task result asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, lambda: self.result(task_id, timeout))
 
     def map(
-        self, func: Callable, items: Iterable, timeout: Optional[float] = None
-    ) -> List[TaskResult]:
+        self, func: Callable, items: Iterable, timeout: float | None = None
+    ) -> list[TaskResult]:
         """Map function over items."""
         task_ids = [self.submit(func, item) for item in items]
         return [self.result(tid, timeout) for tid in task_ids]
 
     async def map_async(
-        self, func: Callable, items: Iterable, timeout: Optional[float] = None
-    ) -> List[TaskResult]:
+        self, func: Callable, items: Iterable, timeout: float | None = None
+    ) -> list[TaskResult]:
         """Map function over items asynchronously."""
         task_ids = [await self.submit_async(func, item) for item in items]
         return [await self.result_async(tid, timeout) for tid in task_ids]

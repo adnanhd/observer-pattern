@@ -2,8 +2,6 @@
 
 from datetime import datetime
 
-import pytest
-
 from eventforge.types import (
     Message,
     RPCRequest,

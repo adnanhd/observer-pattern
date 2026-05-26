@@ -1,7 +1,8 @@
 """Remote message queue subscription and bridging."""
 
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 from uuid import uuid4
 
 from eventforge.queue import MessageQueue
@@ -53,14 +54,14 @@ class RemoteQueue:
     def __init__(
         self,
         queue: MessageQueue,
-        node_id: Optional[str] = None,
+        node_id: str | None = None,
     ):
         self._queue = queue
         self._node_id = node_id or str(uuid4())[:8]
-        self._remote_connections: Dict[str, MessageQueue] = {}
-        self._rpc_servers: Dict[str, RPCServer] = {}
-        self._rpc_clients: Dict[str, RPCClient] = {}
-        self._remote_subscriptions: Dict[str, RemoteSubscription] = {}
+        self._remote_connections: dict[str, MessageQueue] = {}
+        self._rpc_servers: dict[str, RPCServer] = {}
+        self._rpc_clients: dict[str, RPCClient] = {}
+        self._remote_subscriptions: dict[str, RemoteSubscription] = {}
         self._lock = threading.RLock()
 
         # Setup local RPC server for remote subscriptions
@@ -86,7 +87,7 @@ class RemoteQueue:
             return sub_id
 
         @self._local_server.register(name="publish")
-        def handle_publish(topic: str, payload: Any, headers: Dict) -> str:
+        def handle_publish(topic: str, payload: Any, headers: dict) -> str:
             """Handle remote publish request."""
             return self._queue.publish(topic, payload, **headers)
 
@@ -235,7 +236,7 @@ class RemoteQueue:
         """Decorator for local subscription."""
         return self._queue.on(topic)
 
-    def broadcast(self, topic: str, payload: Any, **headers) -> Dict[str, str]:
+    def broadcast(self, topic: str, payload: Any, **headers) -> dict[str, str]:
         """Broadcast message to all connected nodes.
 
         Returns:

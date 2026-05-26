@@ -52,8 +52,9 @@ import time
 import tracemalloc
 import weakref
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Dict, List, Optional, Union
+from typing import Any, ClassVar
 
 from eventforge.types import TaskContext
 
@@ -76,12 +77,12 @@ class ExecutionContext:
 
     func_name: str
     args: tuple
-    kwargs: Dict[str, Any]
+    kwargs: dict[str, Any]
     start_time: float = 0.0
     end_time: float = 0.0
     result: Any = None
-    error: Optional[Exception] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    error: Exception | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def execution_time(self) -> float:
@@ -92,7 +93,7 @@ class ExecutionContext:
         return self.error is None
 
 
-Context = Union[ExecutionContext, TaskContext]
+Context = ExecutionContext | TaskContext
 
 
 # =============================================================================
@@ -112,9 +113,9 @@ class Dispatcher(ABC):
     @abstractmethod
     def dispatch(
         self,
-        subscribers: List[Callable],
+        subscribers: list[Callable],
         args: tuple,
-        kwargs: Dict[str, Any],
+        kwargs: dict[str, Any],
     ) -> None: ...
 
 
@@ -209,12 +210,12 @@ class Eventful:
 
     def __init__(
         self,
-        dispatcher: Optional[Dispatcher] = None,
+        dispatcher: Dispatcher | None = None,
         *,
-        owner: Optional["Observable"] = None,
-        name: Optional[str] = None,
+        owner: Observable | None = None,
+        name: str | None = None,
     ) -> None:
-        self._subscribers: List[Callable] = []
+        self._subscribers: list[Callable] = []
         self._dispatcher = dispatcher or BroadcastDispatcher()
         self._lock = threading.Lock()
         # When owner+name are set, fire() also walks owner's MRO for
@@ -268,7 +269,7 @@ class Eventful:
                         )
 
     @property
-    def subscribers(self) -> List[Callable]:
+    def subscribers(self) -> list[Callable]:
         with self._lock:
             return list(self._subscribers)
 
@@ -320,7 +321,7 @@ class Observable:
             )
         target.fire(*args, **kwargs)
 
-    def events(self) -> List[str]:
+    def events(self) -> list[str]:
         """List of Eventful attribute names on this instance."""
         return [
             name
@@ -350,7 +351,7 @@ class Node:
     name: str
     cpus: int
     memory_gb: float
-    gpus: List[int]
+    gpus: list[int]
     handler: Callable
     _in_flight: int = field(default=0, init=False, repr=False)
     _lock: threading.Lock = field(
@@ -407,8 +408,8 @@ class Meter(Observable):
 
     def __init__(
         self,
-        name: Optional[str] = None,
-        dispatcher: Optional[Dispatcher] = None,
+        name: str | None = None,
+        dispatcher: Dispatcher | None = None,
     ) -> None:
         if name is not None:
             self.name = name
@@ -446,15 +447,18 @@ class Meter(Observable):
         self.update_event.fire(self, val, n)
 
     @property
-    def stats(self) -> Dict[str, float]:
+    def stats(self) -> dict[str, float]:
         return {"val": self.val, "avg": self.avg, "sum": self.sum, "count": self.count}
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}({self.name}: avg={self.avg:.4f}, count={self.count})"
+        return (
+            f"{type(self).__name__}({self.name}: "
+            f"avg={self.avg:.4f}, count={self.count})"
+        )
 
     # ---- lifecycle convention ------------------------------------------
 
-    def measure(self, ctx: Context) -> Optional[float]:
+    def measure(self, ctx: Context) -> float | None:
         """Compute one observation per task call. Default no-op."""
         return None
 
@@ -475,7 +479,7 @@ class Meter(Observable):
     def on_complete(self, ctx: Context) -> None:
         """finally: -- always. Default no-op."""
 
-    def attach(self, source: Observable) -> "Meter":
+    def attach(self, source: Observable) -> Meter:
         """Wire each ``on_<event>`` method as a subscriber to ``source.<event>``.
 
         Convention: method ``on_X`` -> subscribed to event ``"X"``. Returns
@@ -494,9 +498,7 @@ class Meter(Observable):
         return self
 
 
-_METER_EVENT_NAMES: "weakref.WeakKeyDictionary[type, tuple]" = (
-    weakref.WeakKeyDictionary()
-)
+_METER_EVENT_NAMES: weakref.WeakKeyDictionary[type, tuple] = weakref.WeakKeyDictionary()
 _METER_EVENT_NAMES_LOCK = threading.Lock()
 
 
@@ -577,14 +579,14 @@ class Reporter(Observable):
 # of that class fires the corresponding event. Consulted directly by
 # :meth:`Eventful.fire` when the eventful was constructed with
 # ``owner`` + ``name``.
-_CLASS_SUBSCRIBERS: Dict[type, Dict[str, List[Callable]]] = {}
+_CLASS_SUBSCRIBERS: dict[type, dict[str, list[Callable]]] = {}
 
 
 def _register_class_subscriber(target_cls: type, event: str, fn: Callable) -> None:
     _CLASS_SUBSCRIBERS.setdefault(target_cls, {}).setdefault(event, []).append(fn)
 
 
-_REPORTER_OBSERVE_METHODS: "weakref.WeakKeyDictionary[type, tuple]" = (
+_REPORTER_OBSERVE_METHODS: weakref.WeakKeyDictionary[type, tuple] = (
     weakref.WeakKeyDictionary()
 )
 _REPORTER_OBSERVE_LOCK = threading.Lock()
@@ -654,7 +656,7 @@ class TimingMeter(Meter):
 
     name = "timing"
 
-    def __init__(self, threshold: Optional[float] = None, name: str = "timing") -> None:
+    def __init__(self, threshold: float | None = None, name: str = "timing") -> None:
         super().__init__(name=name)
         self.threshold = threshold
 
@@ -714,12 +716,12 @@ class MetricsMeter(Meter):
     def __init__(
         self,
         name: str,
-        extract: Callable[[Context], Optional[float]],
+        extract: Callable[[Context], float | None],
     ) -> None:
         super().__init__(name=name)
         self._extract = extract
 
-    def measure(self, ctx: Context) -> Optional[float]:
+    def measure(self, ctx: Context) -> float | None:
         try:
             return self._extract(ctx)
         except Exception:
