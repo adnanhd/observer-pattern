@@ -1,6 +1,10 @@
 # Task Decorator
 
-The `@task` decorator is the core abstraction in eventforge, providing a unified way to create callable tasks with full lifecycle support.
+The `@task` decorator is a **facade**: it composes a runner (an
+[`Executor`](executor.md)), an optional [`MessageQueue`](queue.md), and
+[observers](observers.md) into a single callable with full lifecycle
+support. It is not a layer of its own -- it wires the existing pieces
+together so you do not have to by hand.
 
 ## Overview
 
@@ -275,6 +279,31 @@ def compute_heavy(data):
     # CPU-bound work
     pass
 ```
+
+## Running the Same Work Remotely
+
+The `executor=` parameter runs the task body *locally* (sequential, thread,
+or process). To run the same logical operation on a remote worker, keep the
+decorated function as the reference implementation, expose it on a worker
+via [RPC](rpc.md) (`RPCServer.register`, or `python -m eventforge.worker`),
+and dispatch from the local side with an `RPCClient`:
+
+```python
+from eventforge import MessageQueue, RPCClient
+from eventforge.transports.tcp import TCPClientTransport
+
+transport = TCPClientTransport(host="gpu-host", port=9090)
+transport.connect()
+client = RPCClient(MessageQueue(transport=transport), service_name="data")
+
+# Same logical call, run on the remote worker by method name.
+result = client.call("compute_heavy", payload)
+```
+
+Locally the `@task` body runs through its `Executor`; remotely the worker
+runs the registered function and returns the value. See [RPC](rpc.md) and
+the distributed worker pool in [Remote Queue](remote.md) /
+`examples/07_distributed_workers.py`.
 
 ## Examples
 

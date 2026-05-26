@@ -1,116 +1,111 @@
 # Remote Queue
 
-Bridge message queues across distributed nodes.
+A push-only switchboard that routes messages to peer nodes over owned TCP
+links.
 
 ## Overview
 
-`RemoteQueue` enables distributed messaging by:
-- Connecting to remote node queues
-- Subscribing to topics on remote nodes
-- Publishing to remote nodes
-- Broadcasting to all connected nodes
+`RemoteQueue` is a node-addressing layer on top of `MessageQueue`. It owns
+one outbound TCP client link per peer and routes `send` / `broadcast` to
+them; it receives via an optional `local` MessageQueue (typically backed by
+a `TCPServerTransport`) that peers publish into.
+
+The model is **push-only**, matching an in-process task runner's remote
+story -- a coordinator sends work out, workers send results back:
+
+- `send(node_id, topic, payload)` -- push to ONE peer
+- `broadcast(topic, payload)` -- push to ALL peers
+- `subscribe(topic, handler)` / `on(topic)` -- receive (peers publish to us)
+
+There is deliberately no "subscribe into a peer's private topic" (pull):
+that direction is request-reply -- use [RPC](rpc.md) -- or just have the
+peer publish to you.
+
+A node needs a `local` queue **only if it receives**. A pure sender does
+not.
 
 ## Basic Usage
 
 ```python
 from eventforge import MessageQueue, RemoteQueue
+from eventforge.transports.tcp import TCPServerTransport
 
-# Node 1
-queue1 = MessageQueue()
-remote1 = RemoteQueue(queue1, node_id="node-1")
+# --- Worker: RECEIVES, so it listens on a port and subscribes locally. ---
+# (TCPServerTransport must be .start()ed before use.)
+worker_srv = TCPServerTransport(host="0.0.0.0", port=9001)
+worker_srv.start()
+worker = RemoteQueue("worker-1", local=MessageQueue(transport=worker_srv))
 
-# Node 2
-queue2 = MessageQueue()
-remote2 = RemoteQueue(queue2, node_id="node-2")
+@worker.on("work")
+def run(msg):
+    print(f"worker got: {msg.payload}")
 
-# Connect nodes (bidirectional)
-remote1.connect("node-2", queue2)
-remote2.connect("node-1", queue1)
+# --- Coordinator: only SENDS, so it needs no local queue at all. ---
+coord = RemoteQueue("coordinator")
+coord.connect("worker-1", host="127.0.0.1", port=9001)  # own a TCP link by address
 
-# Subscribe to remote topic
-@remote1.subscribe_remote("node-2", "events.order")
-def handle_order(msg):
-    print(f"Node-1 received: {msg.payload}")
-
-# Publish from node-2
-remote2.publish("events.order", {"id": 123, "status": "created"})
-# Output: Node-1 received: {'id': 123, 'status': 'created'}
+coord.send("worker-1", "work", {"task": 42})  # push to one peer
+# -> worker got: {'task': 42}
 ```
 
-## Remote Subscriptions
-
-Subscribe to topics on remote nodes:
+## Sending to Peers
 
 ```python
-# Using decorator
-@remote1.subscribe_remote("node-2", "events.*")
-def handler(msg):
-    print(f"Received: {msg.topic} -> {msg.payload}")
+# Push to a single named peer (-> message id)
+msg_id = coord.send("worker-1", "work", {"task": 42})
 
-# Using method
-def another_handler(msg):
-    print(f"Another: {msg.payload}")
-
-sub_id = remote1.add_remote_subscription("node-2", "users.created", another_handler)
+# Push to every connected peer (-> {node_id: message_id})
+ids = coord.broadcast("shutdown", {})
+print(ids)  # {"worker-1": "...", "worker-2": "..."}
 ```
 
-## Remote Publishing
+`send` raises `KeyError` if you are not connected to that node id.
 
-Publish directly to a specific node:
+## Receiving (the `local` queue)
 
-```python
-# Publish to specific remote node
-remote1.publish_remote("node-2", "commands.process", {"action": "start"})
-```
-
-## Broadcasting
-
-Send messages to all connected nodes:
+`subscribe` / `on` attach handlers to this node's `local` MessageQueue,
+which is how peers reach you. Calling them on a node that was created
+*without* a `local` raises `RuntimeError`.
 
 ```python
-# Broadcast to all nodes (including local)
-message_ids = remote1.broadcast("system.shutdown", {"reason": "maintenance"})
+from eventforge import MessageQueue, RemoteQueue
+from eventforge.transports.tcp import TCPServerTransport
 
-# Returns dict: {"node-1": "msg-id-1", "node-2": "msg-id-2", ...}
-print(message_ids)
-```
+srv = TCPServerTransport(host="0.0.0.0", port=9002)
+srv.start()  # start the server transport before it can receive
+node = RemoteQueue("node-2", local=MessageQueue(transport=srv))
 
-## Local Queue Access
-
-`RemoteQueue` also provides access to the local queue:
-
-```python
-remote = RemoteQueue(queue, node_id="node-1")
-
-# Subscribe locally
-@remote.on("local.events")
-def local_handler(msg):
+@node.on("results")
+def on_result(msg):
     print(msg.payload)
 
-# Publish locally
-remote.publish("local.events", {"data": "value"})
+# or, non-decorator:
+def handler(msg):
+    print(msg.payload)
 
-# Access underlying queue
-local_queue = remote.local_queue
+sub_id = node.subscribe("results", handler)
 ```
 
 ## Connection Management
 
 ```python
-# Connect to remote
-remote1.connect("node-2", queue2)
+coord = RemoteQueue("coordinator")
 
-# Check node ID
-print(remote1.node_id)  # "node-1"
+# Open + own an outbound TCP link to a peer (replaces any existing link).
+coord.connect("worker-1", host="127.0.0.1", port=9001)
 
-# Disconnect
-remote1.disconnect("node-2")
+# Currently connected peer node ids.
+print(coord.peers)        # ['worker-1']
+print(coord.node_id)      # 'coordinator'
 
-# Context manager for cleanup
-with RemoteQueue(queue, node_id="node-1") as remote:
-    remote.connect("node-2", queue2)
-    # ...
-# Automatically closes on exit
+# Close one link (-> True if it existed).
+coord.disconnect("worker-1")
+
+# Context manager: closes every peer link and the local queue on exit.
+with RemoteQueue("coordinator") as coord:
+    coord.connect("worker-1", host="127.0.0.1", port=9001)
+    coord.send("worker-1", "work", {"task": 1})
+# all links + local queue closed here
 ```
 
 ## API Reference
@@ -119,184 +114,106 @@ with RemoteQueue(queue, node_id="node-1") as remote:
 
 ```python
 class RemoteQueue:
-    def __init__(
-        self,
-        queue: MessageQueue,
-        node_id: Optional[str] = None,  # Auto-generated if not provided
-    ):
-        """Create remote queue wrapper."""
-    
+    def __init__(self, node_id: str, *, local: MessageQueue | None = None):
+        """Switchboard for one node.
+
+        local: MessageQueue this node receives on, e.g.
+            MessageQueue(TCPServerTransport(host="0.0.0.0", port=9001)).
+            Required for subscribe() / on(); send() / broadcast() work
+            without it.
+        """
+
     @property
-    def node_id(self) -> str:
-        """This node's identifier."""
-    
+    def node_id(self) -> str: ...
+
     @property
-    def local_queue(self) -> MessageQueue:
-        """Underlying local queue."""
-    
-    def connect(self, remote_node_id: str, remote_queue: MessageQueue) -> None:
-        """Connect to a remote node's queue."""
-    
-    def disconnect(self, remote_node_id: str) -> bool:
-        """Disconnect from a remote node."""
-    
-    def subscribe_remote(
-        self,
-        remote_node_id: str,
-        topic: str,
-    ) -> Callable:
-        """Decorator to subscribe to a topic on a remote node."""
-    
-    def add_remote_subscription(
-        self,
-        remote_node_id: str,
-        topic: str,
-        handler: Callable,
-    ) -> str:
-        """Subscribe to a topic on a remote node. Returns subscription ID."""
-    
-    def publish_remote(
-        self,
-        remote_node_id: str,
-        topic: str,
-        payload: Any,
-        **headers,
-    ) -> str:
-        """Publish a message to a remote node. Returns message ID."""
-    
-    def publish(self, topic: str, payload: Any, **headers) -> str:
-        """Publish to local queue."""
-    
+    def local(self) -> MessageQueue | None: ...
+
+    @property
+    def peers(self) -> list[str]:
+        """Currently connected peer node ids."""
+
+    def connect(self, node_id: str, host: str, port: int) -> None:
+        """Open and own an outbound TCP link to a peer (replaces existing)."""
+
+    def disconnect(self, node_id: str) -> bool:
+        """Close the link to a peer. Returns True if it existed."""
+
+    def send(self, node_id: str, topic: str, payload: Any, **headers) -> str:
+        """Push a message to one peer. Returns the message id."""
+
+    def broadcast(self, topic: str, payload: Any, **headers) -> dict[str, str]:
+        """Push to every connected peer. Returns {node_id: message_id}."""
+
     def subscribe(self, topic: str, handler: Callable) -> str:
-        """Subscribe to local queue."""
-    
+        """Subscribe a handler on the local queue (how peers reach us)."""
+
     def on(self, topic: str) -> Callable:
-        """Decorator for local subscription."""
-    
-    def broadcast(self, topic: str, payload: Any, **headers) -> Dict[str, str]:
-        """Broadcast to all connected nodes. Returns {node_id: message_id}."""
-    
+        """Decorator form of subscribe; returns the handler unchanged."""
+
     def close(self) -> None:
-        """Close all connections."""
-```
-
-### RemoteSubscription
-
-```python
-class RemoteSubscription:
-    subscription_id: str
-    topic: str
-    remote_service: str
-    handler: Callable
+        """Close every peer link and the local queue."""
 ```
 
 ## Examples
 
-### Distributed Event System
+### Coordinator / Worker Pool
 
 ```python
 from eventforge import MessageQueue, RemoteQueue
+from eventforge.transports.tcp import TCPServerTransport
 
-# Create nodes
-nodes = {}
-for name in ["gateway", "users", "orders", "notifications"]:
-    queue = MessageQueue()
-    nodes[name] = RemoteQueue(queue, node_id=name)
+# --- Workers: each listens on its own port and subscribes locally. ---
+def make_worker(node_id: str, port: int) -> RemoteQueue:
+    srv = TCPServerTransport(host="0.0.0.0", port=port)
+    srv.start()
+    worker = RemoteQueue(node_id, local=MessageQueue(transport=srv))
 
-# Connect all nodes to gateway
-for name, node in nodes.items():
-    if name != "gateway":
-        nodes["gateway"].connect(name, node.local_queue)
-        node.connect("gateway", nodes["gateway"].local_queue)
+    @worker.on("work")
+    def run(msg, _node=node_id):
+        print(f"{_node} got: {msg.payload}")
 
-# Users service subscribes to user events from gateway
-@nodes["users"].subscribe_remote("gateway", "users.*")
-def handle_user_event(msg):
-    print(f"Users service: {msg.topic}")
+    return worker
 
-# Orders service subscribes to order events
-@nodes["orders"].subscribe_remote("gateway", "orders.*")
-def handle_order_event(msg):
-    print(f"Orders service: {msg.topic}")
+workers = {
+    "worker-1": make_worker("worker-1", 9101),
+    "worker-2": make_worker("worker-2", 9102),
+}
 
-# Notifications subscribes to all events
-@nodes["notifications"].subscribe_remote("gateway", "*")
-def handle_notification(msg):
-    print(f"Notification: {msg.topic}")
+# --- Coordinator: pure sender, no local queue. ---
+coord = RemoteQueue("coordinator")
+coord.connect("worker-1", host="127.0.0.1", port=9101)
+coord.connect("worker-2", host="127.0.0.1", port=9102)
 
-# Gateway publishes events
-nodes["gateway"].publish("users.created", {"id": 1, "name": "Alice"})
-nodes["gateway"].publish("orders.placed", {"id": 100, "user_id": 1})
+# Dispatch to one peer or fan out to all of them.
+coord.send("worker-1", "work", {"task": 1})
+coord.broadcast("work", {"task": "ping"})
 ```
 
-### Hub-and-Spoke Pattern
+### Bidirectional (workers push results back)
+
+To get results back, give the coordinator a `local` queue too and have each
+worker `send` to it. The coordinator subscribes locally for the results
+topic; the worker connects an outbound link back to the coordinator.
 
 ```python
 from eventforge import MessageQueue, RemoteQueue
+from eventforge.transports.tcp import TCPServerTransport
 
-# Central hub
-hub_queue = MessageQueue()
-hub = RemoteQueue(hub_queue, node_id="hub")
+# Coordinator now also RECEIVES, so it listens + subscribes.
+coord_srv = TCPServerTransport(host="0.0.0.0", port=9000)
+coord_srv.start()
+coord = RemoteQueue("coordinator", local=MessageQueue(transport=coord_srv))
 
-# Spoke nodes
-spokes = []
-for i in range(3):
-    spoke_queue = MessageQueue()
-    spoke = RemoteQueue(spoke_queue, node_id=f"spoke-{i}")
-    
-    # Connect spoke to hub
-    hub.connect(f"spoke-{i}", spoke_queue)
-    spoke.connect("hub", hub_queue)
-    
-    # Each spoke handles commands
-    @spoke.subscribe_remote("hub", "commands.*")
-    def handle_command(msg, node=spoke):
-        print(f"{node.node_id} received: {msg.payload}")
-    
-    spokes.append(spoke)
+@coord.on("results")
+def on_result(msg):
+    print(f"coordinator got result: {msg.payload}")
 
-# Hub broadcasts command to all spokes
-hub.broadcast("commands.execute", {"action": "sync"})
+# A worker opens its own outbound link back to the coordinator and pushes.
+worker = RemoteQueue("worker-1")  # only sends here
+worker.connect("coordinator", host="127.0.0.1", port=9000)
+worker.send("coordinator", "results", {"task": 1, "value": 42})
 ```
 
-### Federated Services
-
-```python
-from eventforge import MessageQueue, RemoteQueue, RPCServer, RPCClient
-
-# Region A
-region_a_queue = MessageQueue()
-region_a = RemoteQueue(region_a_queue, node_id="region-a")
-
-region_a_rpc = RPCServer(region_a_queue, service_name="data")
-
-@region_a_rpc.register()
-def get_users():
-    return [{"id": 1, "name": "Alice", "region": "A"}]
-
-region_a_rpc.serve(blocking=False)
-
-# Region B
-region_b_queue = MessageQueue()
-region_b = RemoteQueue(region_b_queue, node_id="region-b")
-
-region_b_rpc = RPCServer(region_b_queue, service_name="data")
-
-@region_b_rpc.register()
-def get_users():
-    return [{"id": 2, "name": "Bob", "region": "B"}]
-
-region_b_rpc.serve(blocking=False)
-
-# Connect regions
-region_a.connect("region-b", region_b_queue)
-region_b.connect("region-a", region_a_queue)
-
-# Federated query from Region A
-local_client = RPCClient(region_a_queue, service_name="data")
-remote_client = RPCClient(region_b_queue, service_name="data")
-
-all_users = local_client.get_users() + remote_client.get_users()
-print(all_users)
-# [{'id': 1, 'name': 'Alice', 'region': 'A'}, {'id': 2, 'name': 'Bob', 'region': 'B'}]
-```
+For *pulling* a value from a peer (request-reply), use [RPC](rpc.md) rather
+than `RemoteQueue`: `RemoteQueue` is push-only by design.

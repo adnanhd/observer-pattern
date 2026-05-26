@@ -26,82 +26,82 @@ Core install pulls only `pydantic` + `typing-extensions`. The TCP
 transport is stdlib. Optional integrations (Pydantic Logfire, etc.)
 have their own extras documented in `docs/`.
 
-## When to use which queue
+## Concepts
 
-| You want... | Use |
-|---|---|
-| Local pub-sub in one process | `MessageQueue(transport=MemoryTransport())` |
-| Competing-consumer work queue with ack/nack + DLQ | `WorkQueue` (extends MessageQueue) |
-| Cross-process / cross-machine pub-sub or RPC | `MessageQueue(transport=TCPServerTransport(...))` and `TCPClientTransport(...)` on the client |
-| RPC over an existing queue | `RPCServer(queue)` / `RPCClient(queue)` |
+The mental model is a 2x2. One axis is *what kind of exchange* you want;
+the other is *where the other side lives*.
 
-## Quick Start
+- **pub-sub** -- publish / subscribe, fire-and-forget. The sender does not
+  get a return value; zero or more subscribers react.
+- **request-reply** -- call / register, returns a value. One caller, one
+  result.
+- **local** -- same process.
+- **remote** -- another process or machine, reached over a `Transport`.
 
-### Task Decorator
+|                  | local                  | remote        |
+|------------------|------------------------|---------------|
+| **pub-sub**      | `MessageQueue`         | `RemoteQueue` |
+| **request-reply**| `Executor`             | RPC (`RPCServer` / `RPCClient`) |
 
-The `@task` decorator is the core abstraction - callable-compatible with full lifecycle support:
+The `Transport` (Memory or TCP) is *where* local-vs-remote actually lives:
+the same `MessageQueue` API runs in-process on `MemoryTransport` or across
+the network on a TCP transport. `@task` is **not** a fifth box -- it is a
+facade that composes a runner (an `Executor`) + a `MessageQueue` +
+`Observers` into one decorated callable.
 
-```python
-from eventforge import task, MessageQueue, Executor, ExecutionMode, TimingMeter
+## Transport Layer
 
-queue = MessageQueue()
-executor = Executor(mode=ExecutionMode.THREAD)
-timing = TimingMeter()
+A `Transport` is the wire under a `MessageQueue`. Two ship in the box:
 
-@task(
-    queue=queue,
-    topic="process.data",
-    executor=executor,
-    on_execute=[timing],  # Observers for profiling
-    on_success=lambda ctx: print(f"Done: {ctx.result}"),
-    on_failure=lambda ctx: print(f"Failed: {ctx.error}"),
-)
-def process_data(data):
-    return data.upper()
+- `MemoryTransport` -- in-process, thread-safe, the default. Zero
+  serialization, zero sockets.
+- `TCPServerTransport(host, port)` / `TCPClientTransport(host, port)` --
+  length-prefixed JSON over a TCP socket (`[4-byte big-endian length][JSON]`),
+  for cross-process / cross-machine delivery. The server must be
+  `.start()`ed; the client must be `.connect()`ed.
 
-# Direct call - full observer support, returns result
-result = process_data("hello")  # "HELLO"
-
-# Queue trigger - same execution path, same observers
-queue.publish("process.data", "world")
-
-# Both tracked by timing observer
-print(timing.stats)  # {'count': 2, 'avg': 0.001, ...}
-```
-
-Key features:
-- **Callable-compatible**: Direct calls return results, not wrapped objects
-- **Unified execution**: Direct and queue-triggered use the same path
-- **Observer hooks**: Profile with `TimingMeter`, `MetricsMeter`, etc.
-- **Lifecycle handlers**: `on_success`, `on_failure`, `on_complete`
-- **Auto-publish**: Results published to `{topic}.success` / `{topic}.failure`
-
-### Executor
-
-Run tasks in sequential, thread, or process mode:
+All transports implement one small ABC, so they are interchangeable under
+`MessageQueue`, `RPCServer`, and `RPCClient`:
 
 ```python
-from eventforge import Executor, ExecutionMode
-
-def heavy_task(n):
-    return sum(range(n))
-
-# Thread-based execution
-with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
-    task_id = executor.submit(heavy_task, 1000000)
-    result = executor.result(task_id)
-    print(result.value)
-
-# Process-based execution for CPU-bound tasks
-with Executor(mode=ExecutionMode.PROCESS, max_workers=4) as executor:
-    results = executor.map(heavy_task, [100000, 200000, 300000])
-    for r in results:
-        print(r.value)
+class Transport(ABC):
+    def send(self, message: Message) -> None: ...
+    def receive(self, topic, timeout=None) -> Message | None: ...
+    async def receive_async(self, topic, timeout=None) -> Message | None: ...
+    def subscribe(self, topic, callback) -> str: ...
+    def unsubscribe(self, subscription_id) -> bool: ...
+    def close(self) -> None: ...
 ```
 
-### Message Queue
+Swapping transports is a constructor change; nothing above the transport
+moves:
 
-Pub-sub messaging with Pydantic validation:
+```python
+from eventforge import MessageQueue
+from eventforge.transports.tcp import TCPServerTransport
+
+# in-process (default)
+local = MessageQueue()
+
+# cross-process: same MessageQueue API, different wire
+transport = TCPServerTransport(host="127.0.0.1", port=9090)
+transport.start()
+networked = MessageQueue(transport=transport)
+```
+
+Because the ABC is this small, you could add a Redis or NATS transport by
+implementing those six methods -- nothing else in the stack needs to know.
+
+## Messaging
+
+Pub-sub: fire-and-forget, no return value.
+
+### MessageQueue (local, one channel)
+
+`MessageQueue` is topic-keyed pub-sub over a single transport. Subscribe
+with the `@queue.on(...)` decorator (or `subscribe`), publish with
+`publish`. It also supports a request-reply helper (`request` / `reply`)
+on top of the same channel.
 
 ```python
 from eventforge import MessageQueue
@@ -113,9 +113,9 @@ def handle_event(message):
     print(f"Received: {message.topic} -> {message.payload}")
 
 queue.publish("events.user", {"action": "login", "user": "alice"})
-# Output: Received: events.user -> {'action': 'login', 'user': 'alice'}
+# Received: events.user -> {'action': 'login', 'user': 'alice'}
 
-# Request-reply pattern
+# Request-reply over the same queue
 @queue.on("math.add")
 def add_handler(message):
     a, b = message.payload["a"], message.payload["b"]
@@ -125,79 +125,21 @@ response = queue.request("math.add", {"a": 10, "b": 20}, timeout=5.0)
 print(response.payload)  # 30
 ```
 
-### Observers
+Topic strings support `*` (one segment) and `**` (any number of segments)
+patterns. The same queue works across processes by swapping in a TCP
+transport (see [Transport Layer](#transport-layer)).
 
-Profile task execution with built-in observers:
+### RemoteQueue (push-only switchboard across nodes)
 
-```python
-from eventforge import task, TimingMeter, MetricsMeter, observe
+`RemoteQueue` is a node-addressing layer over `MessageQueue`. It owns one
+outbound TCP link per peer and routes `send` / `broadcast` to them; it
+receives via an optional `local` MessageQueue (typically TCP-server-backed)
+that peers push into. The model is **push-only**: a node sends to a named
+peer, and receivers just `subscribe` locally -- there is no reaching into a
+peer's private topics (that direction is request-reply; use RPC).
 
-timing = TimingMeter(threshold=1.0)  # Alert if > 1s
-metrics = MetricsMeter()
-
-@task(on_execute=[timing, metrics])
-def my_task(x):
-    return x * 2
-
-my_task(21)
-my_task(42)
-
-print(timing.stats)   # {'count': 2, 'avg': 0.001, 'min': ..., 'max': ...}
-print(metrics.stats)  # {'calls': 2, 'successes': 2, 'failures': 0}
-
-# Or use the @observe decorator for simpler cases
-@observe(timing, metrics)
-def simple_function(x):
-    return x + 1
-```
-
-Available observers:
-- `TimingMeter` - Execution timing with threshold alerts
-- `MetricsMeter` - Call counts, success/failure rates
-- `LoggingReporter` - Structured logging
-- `MemoryMeter` - Memory usage tracking
-- `CPUMeter` - CPU usage tracking
-- `Meter` - Running averages (for training loops)
-
-### RPC
-
-Remote procedure calls over message queue:
-
-```python
-from eventforge import MessageQueue, Executor, RPCServer, RPCClient
-
-queue = MessageQueue()
-executor = Executor()
-
-# Server
-server = RPCServer(queue, executor, service_name="calculator")
-
-@server.register()
-def add(a: int, b: int) -> int:
-    return a + b
-
-@server.register()
-def multiply(a: int, b: int) -> int:
-    return a * b
-
-server.serve()
-
-# Client
-client = RPCClient(queue, service_name="calculator")
-print(client.call("add", 10, 20))       # 30
-print(client.multiply(5, 6))            # 30 (dynamic method access)
-
-server.stop()  # serve() takes a stop_event for graceful shutdown
-```
-
-### Remote Queue
-
-`RemoteQueue` is a node-addressing switchboard: it owns one outbound TCP
-link per peer and routes `send`/`broadcast` to them, while you receive on a
-`local` queue that peers push into. Push-only -- a node sends to a named
-peer; receivers just `subscribe` locally (no reaching into a peer's topics).
-
-A node needs a `local` queue **only if it receives**. A pure sender doesn't.
+A node needs a `local` queue **only if it receives**. A pure sender does
+not.
 
 ```python
 from eventforge import MessageQueue, RemoteQueue
@@ -217,68 +159,212 @@ def run(msg):
 coord = RemoteQueue("coordinator")
 coord.connect("worker-1", host="127.0.0.1", port=9001)  # own a TCP link by address
 
-coord.send("worker-1", "work", {"task": 42})  # push to one worker
+coord.send("worker-1", "work", {"task": 42})  # push to one peer
 # -> worker got: {'task': 42}
 
-coord.broadcast("work", {"task": 99})          # push to ALL connected workers
+coord.broadcast("work", {"task": 99})          # push to ALL connected peers
+print(coord.peers)                             # ['worker-1']
 ```
 
-The coordinator has no `local` because nothing pushes *to* it; the worker has
-one because it must receive. To make it bidirectional, give the coordinator a
-`local` too and have the worker `send` results back.
+To make it bidirectional, give the coordinator a `local` too and have the
+worker `send` results back. To *pull* from a peer's topic, use
+[Execution / RPC](#execution) instead -- `RemoteQueue` is push-only by
+design.
 
-> To subscribe to a *remote* node's private topic (pull) you'd use RPC, not
-> `RemoteQueue` -- see [RPC](#rpc). `RemoteQueue` is push-only by design.
+## Execution
 
-### Async Support
+Request-reply: one call, one returned value.
 
-All components support async/await:
+### Executor (local)
+
+`Executor` runs a callable and hands back a `TaskResult`. Three modes:
+`SEQUENTIAL` (run inline, the default), `THREAD` (thread pool, I/O-bound),
+`PROCESS` (process pool, CPU-bound). Submit a job and fetch its result by
+id, or `map` over an iterable:
 
 ```python
-import asyncio
-from eventforge import MessageQueue, Executor, ExecutionMode
+from eventforge import Executor, ExecutionMode
 
-async def main():
-    # Async message queue
-    queue = MessageQueue()
-    
-    @queue.on("async.task")
-    def handler(msg):
-        return msg.payload * 2
-    
-    result = await queue.request_async("async.task", 21, timeout=5.0)
-    print(result.payload)  # 42
-    
-    # Async executor
-    async with Executor(mode=ExecutionMode.THREAD) as executor:
-        task_id = await executor.submit_async(lambda x: x ** 2, 10)
-        result = await executor.result_async(task_id)
-        print(result.value)  # 100
+def heavy_task(n):
+    return sum(range(n))
 
-asyncio.run(main())
+# Thread-based execution
+with Executor(mode=ExecutionMode.THREAD, max_workers=4) as executor:
+    task_id = executor.submit(heavy_task, 1_000_000)
+    result = executor.result(task_id)
+    print(result.value)
+
+# Process-based execution for CPU-bound work
+with Executor(mode=ExecutionMode.PROCESS, max_workers=4) as executor:
+    results = executor.map(heavy_task, [100_000, 200_000, 300_000])
+    for r in results:
+        print(r.value)
 ```
 
-## Distributed execution: local builds, remote runs
+`submit` returns a `task_id`; `result(task_id)` blocks for the
+`TaskResult` (`.value` / `.error` / `.status` / `.execution_time`). In
+`SEQUENTIAL` mode the work runs inline at submit time. Async variants
+(`submit_async`, `result_async`, `map_async`) mirror the sync API.
 
-The intended deployment for ML / data pipelines:
+### RPC (remote)
 
-- **Local** process builds work envelopes (`registry-pattern.serialize`)
-  and dispatches them via `RPCClient`.
-- **Remote** workers run `RPCServer` on a TCP port, accept envelopes,
-  reconstruct objects with `registry.build(...)`, run the work, return
-  JSON-friendly results.
-- eventforge owns the wire (JSON over TCP, no pickle); registry-pattern
-  owns the schema (Pydantic validation on both ends).
+RPC is request-reply across a queue: `RPCServer` registers methods,
+`RPCClient.call(name, *args)` invokes them and returns the result. Run it
+over a TCP-backed `MessageQueue` to reach another process or machine -- the
+client API is identical whether the server is in-process or across the
+network.
 
-See `examples/06_registry_integration.py` for the in-process version
-and `examples/07_distributed_workers.py` for the cross-process variant
-with N workers + round-robin client.
+```python
+from eventforge import MessageQueue, RPCServer, RPCClient
 
-### Containerized topology (Docker / Apptainer)
+queue = MessageQueue()
 
-The cross-process variant above containerizes into an
-**eventforge-network**: a pool of RPC *server* nodes and one or more
-*demander* (client) nodes that round-robin across them.
+# Server
+server = RPCServer(queue, service_name="calculator")
+
+@server.register()
+def add(a: int, b: int) -> int:
+    return a + b
+
+@server.register()
+def multiply(a: int, b: int) -> int:
+    return a * b
+
+server.serve(blocking=False)  # subscribe + return; True blocks the thread
+
+# Client
+client = RPCClient(queue, service_name="calculator")
+print(client.call("add", 10, 20))   # 30
+print(client.multiply(5, 6))        # 30 (dynamic method access)
+
+server.stop()
+```
+
+`RoundRobinRPCClient([client1, client2, ...])` spreads `call`s across a
+pool of clients (each typically pointed at a different worker); `with_retry`
+wraps a client with exponential-backoff retries. Both keep the same
+`call(name, *args)` surface.
+
+`Executor` is local request-reply; `RPCClient` is the remote counterpart --
+same call/return shape, different distance.
+
+## Composing with @task
+
+`@task` is **not** a layer -- it is a facade. It composes a runner (an
+`Executor`), an optional `MessageQueue`, and `Observers` into a single
+callable that you can invoke directly *or* trigger by publishing to its
+topic. Both paths run the identical lifecycle.
+
+```python
+from eventforge import task, MessageQueue, Executor, ExecutionMode, TimingMeter
+
+queue = MessageQueue()
+executor = Executor(mode=ExecutionMode.THREAD)
+timing = TimingMeter()
+
+@task(
+    queue=queue,             # pub-sub wiring (subscribe topic + publish result)
+    topic="process.data",
+    executor=executor,       # the runner: SEQUENTIAL / THREAD / PROCESS
+    on_execute=[timing],     # observers (cross-cutting)
+    on_success=lambda ctx: print(f"Done: {ctx.result}"),
+)
+def process_data(data):
+    return data.upper()
+
+# Direct call -- runs locally through the Executor, returns the result.
+result = process_data("hello")   # "HELLO"
+
+# Queue trigger -- same execution path, same observers.
+queue.publish("process.data", "world")
+
+print(timing.stats)              # {'count': 2, 'avg': ..., ...}
+```
+
+Running the same work remotely is a wiring change, not a rewrite: keep the
+function as the reference implementation, expose it on a worker via
+`RPCServer` (or `python -m eventforge.worker`, see [Deployment](#deployment)),
+and dispatch from the local side with an `RPCClient`:
+
+```python
+from eventforge import MessageQueue, RPCClient
+from eventforge.transports.tcp import TCPClientTransport
+
+transport = TCPClientTransport(host="gpu-host", port=9090)
+transport.connect()
+client = RPCClient(MessageQueue(transport=transport), service_name="data")
+
+# Dispatch the SAME logical operation to a remote worker by name.
+result = client.call("process_data", "world")
+```
+
+Locally the `@task` body runs through its `Executor`; remotely the worker
+runs the registered function and returns the value. `@task` simply bundles
+the local runner + queue + observers so you do not wire them by hand.
+
+## Observers
+
+Observers are cross-cutting: they measure or log a task without being part
+of its logic. Attach them via `@task(on_execute=[...])` or the standalone
+`@observe(...)` decorator.
+
+```python
+from eventforge import task, TimingMeter, MetricsMeter, observe
+
+timing = TimingMeter(threshold=1.0)  # alert if > 1s
+metrics = MetricsMeter()
+
+@task(on_execute=[timing, metrics])
+def my_task(x):
+    return x * 2
+
+my_task(21)
+my_task(42)
+
+print(timing.stats)   # {'count': 2, 'avg': ..., 'min': ..., 'max': ...}
+print(metrics.stats)  # {'calls': 2, 'successes': 2, 'failures': 0}
+
+# Or @observe on any plain function:
+@observe(timing, metrics)
+def simple_function(x):
+    return x + 1
+```
+
+Built-in observers:
+
+- `TimingMeter` -- execution timing with threshold alerts
+- `MetricsMeter` -- call counts, success/failure rates
+- `MemoryMeter` -- memory usage tracking
+- `CPUMeter` -- CPU usage tracking
+- `Meter` -- running averages (for training loops)
+- `LoggingReporter` -- structured logging
+
+The core primitive underneath is `Observable` / `Eventful` / `Dispatcher`
+(`BroadcastDispatcher`, `RoundRobinDispatcher`, `ConcurrentDispatcher`,
+`LeastLoadedDispatcher`) plus `Node` -- see [docs/observers.md](docs/observers.md).
+
+## Deployment
+
+A *server* node runs the generic worker entrypoint against a handler
+module; a *demander* (client) connects with `RPCClient` /
+`RoundRobinRPCClient` over the same `service_name` and round-robins across
+the server pool.
+
+```bash
+python -m eventforge.worker --import handlers --service math --port 9090
+# handlers.py exposes:  HANDLERS = {"compute": compute};  SERVICE_NAME = "math"
+```
+
+The module must define a non-empty `HANDLERS` dict of `{name: callable}`
+(and optionally `SERVICE_NAME`); the entrypoint binds a TCP server, builds
+the `MessageQueue` + `RPCServer`, and registers every handler -- no
+transport boilerplate.
+
+Run a whole topology on one machine (servers + a demander):
+
+```bash
+docker compose -f deploy/docker-compose.yml up --build
+```
 
 ```
 demander  --RPC (JSON/TCP)-->  server1
@@ -286,146 +372,110 @@ demander  --RPC (JSON/TCP)-->  server1
                           \-->  server3
 ```
 
-Each server runs the generic worker entrypoint against a handler module
--- no transport boilerplate, no inlined worker source:
-
-```bash
-python -m eventforge.worker --import handlers --service math --port 9090
-# handlers.py exposes:  HANDLERS = {"compute": compute};  SERVICE_NAME = "math"
-```
-
-Run the whole topology on one machine (3 servers + a demander):
-
-```bash
-docker compose -f deploy/docker-compose.yml up --build
-```
-
-**Scope, honestly:** this is an RPC compute-worker pool for a *trusted*
-network -- request/response, client-side load balancing (the demander
-needs every server address; no broker, no discovery), and the TCP
-transport has no auth/TLS. It is **not** a durable job queue:
-`WorkQueue`'s competing-consumer / ack-nack / DLQ machinery is
-in-process only and does not cross containers. For brokered, durable
-cross-machine queues use Celery / RQ / Dramatiq; eventforge's niche is
-scaling code *already* on the eventforge + registry-pattern stack
-without a second framework. Full guide and the `eventforge.worker`
-contract: [`deploy/README.md`](deploy/README.md).
-
-## Logging
-
-Core lifecycle events emit stdlib `logging` at INFO -- no observer
-needed for basic visibility:
-
-```python
-import logging
-logging.basicConfig(level=logging.INFO)
-# now @task calls emit task.start / task.done / task.error
-```
-
-`LoggingReporter` stays for the case where you want args/result detail
-beyond the default.
+**Scope, honestly:** this is a push-only RPC compute-worker pool for a
+*trusted* network -- request/response, client-side load balancing (the
+demander needs every server address; no broker, no discovery), and the TCP
+transport has no auth/TLS. It is **not** a durable job queue: `WorkQueue`'s
+competing-consumer / ack-nack / DLQ machinery is in-process only and does
+not cross containers. For brokered, durable cross-machine queues use Celery
+/ RQ / Dramatiq. eventforge's niche is scaling code *already* on the
+eventforge + registry-pattern stack without a second framework. Full guide
+and the `eventforge.worker` contract: [`deploy/README.md`](deploy/README.md).
+`deploy/` also ships a Dockerfile and an Apptainer definition.
 
 ## API Reference
 
-### Types
-
-- `Message` - Pydantic model for queue messages
-- `TaskRequest` - Task submission request
-- `TaskResult` - Task execution result
-- `TaskStatus` - Enum: PENDING, RUNNING, COMPLETED, FAILED, CANCELLED
-- `TaskContext` - Context passed through task lifecycle
-- `SharedState` - Thread-safe state for observer data sharing
-- `RPCRequest` / `RPCResponse` - RPC message types
+Compact per-type signatures. See `docs/` for full detail.
 
 ### Transport
 
-- `Transport` - Abstract base for message transports
-- `MemoryTransport` - In-memory transport (default)
-- `TCPServerTransport(host, port)` / `TCPClientTransport(host, port)` --
-  JSON-over-TCP across processes / machines
+```python
+MemoryTransport(max_queue_size=1000)              # in-process (default)
+TCPServerTransport(host="127.0.0.1", port=9090)   # call .start()
+TCPClientTransport(host="localhost", port=9090)   # call .connect()
+# ABC: send / receive / receive_async / subscribe / unsubscribe / close
+```
 
 ### MessageQueue
 
 ```python
-queue = MessageQueue(transport=None)  # Uses MemoryTransport by default
+queue = MessageQueue(transport=None)              # default MemoryTransport
 
-queue.publish(topic, payload, **headers)  # Publish message
-queue.subscribe(topic, handler)           # Subscribe to topic
-queue.on(topic)                           # Decorator for subscription
-queue.register_task(topic, task_func)     # Register task for topic
-queue.request(topic, payload, timeout)    # Request-reply (sync)
-await queue.request_async(...)            # Request-reply (async)
+queue.publish(topic, payload, **headers)          # -> message_id
+queue.subscribe(topic, handler)                   # -> handler_id
+queue.on(topic)                                   # decorator or on(topic, fn)
+queue.unsubscribe(handler_id)                     # -> bool
+queue.receive(topic, timeout=None)                # -> Message | None
+queue.request(topic, payload, timeout=30.0, **h)  # -> Message | None
+queue.reply(original, payload, **headers)         # -> message_id
+queue.close()
+```
+
+### RemoteQueue
+
+```python
+remote = RemoteQueue(node_id, *, local=None)      # local = MessageQueue you receive on
+
+remote.connect(node_id, host, port)               # open + own a TCP link to a peer
+remote.disconnect(node_id)                        # -> bool
+remote.send(node_id, topic, payload, **headers)   # push to ONE peer -> msg_id
+remote.broadcast(topic, payload, **headers)       # push to ALL peers -> {node: msg_id}
+remote.subscribe(topic, handler)                  # receive locally -> sub_id
+remote.on(topic)                                  # decorator form of subscribe
+remote.peers                                      # connected peer node ids
+remote.close()
 ```
 
 ### Executor
 
 ```python
-executor = Executor(
-    mode=ExecutionMode.SEQUENTIAL,  # SEQUENTIAL, THREAD, or PROCESS
-    max_workers=4,
-    queue=None  # Optional MessageQueue for events
-)
+executor = Executor(mode=ExecutionMode.SEQUENTIAL, max_workers=4)
 
-task_id = executor.submit(func, *args, **kwargs)
-result = executor.result(task_id, timeout=None)
-results = executor.map(func, items)
-executor.cancel(task_id)
-stats = executor.stats()
-```
-
-### Task Decorator
-
-```python
-@task(
-    queue=None,           # MessageQueue for pub-sub integration
-    topic=None,           # Topic name (defaults to function name)
-    executor=None,        # Executor instance (defaults to SEQUENTIAL)
-    on_execute=None,      # List of observers for lifecycle hooks
-    on_success=None,      # Handler called on success (receives TaskContext)
-    on_failure=None,      # Handler called on failure (receives TaskContext)
-    on_complete=None,     # Handler called after execution (success or failure)
-    publish_result=True,  # Auto-publish to {topic}.success/{topic}.failure
-)
-def my_task(x):
-    return x * 2
-
-# Direct call
-result = my_task(21)  # 42
-
-# Access shared state
-my_task.state.set("key", "value")
-my_task.state.get("key")  # "value"
+task_id = executor.submit(func, *args, **kwargs)  # -> task_id
+result = executor.result(task_id, timeout=None)   # -> TaskResult
+results = executor.map(func, items, timeout=None) # -> list[TaskResult]
+executor.start(); executor.stop(wait=True)        # also a context manager
+# ExecutionMode: SEQUENTIAL / THREAD / PROCESS
 ```
 
 ### RPC
 
 ```python
 # Server
-server = RPCServer(queue, executor, service_name="myservice")
-server.register(name=None)(func)  # Register method
-server.serve()
-server.stop()  # serve() takes a stop_event for graceful shutdown
+server = RPCServer(queue, executor=None, service_name="rpc")
+server.register(name=None)(func)                  # decorator
+server.add_method(name, func)
+server.serve(blocking=True)                       # blocking=False returns immediately
+server.stop()
 
 # Client
-client = RPCClient(queue, service_name="myservice", timeout=30.0)
-result = client.call(method, *args, **kwargs)
-result = await client.call_async(method, *args, **kwargs)
-result = client.method_name(*args)  # Dynamic access
+client = RPCClient(queue, service_name="rpc", timeout=30.0)
+client.call(method, *args, timeout=None, **kwargs)   # -> result
+client.method_name(*args)                            # dynamic access
+RoundRobinRPCClient([client1, client2, ...])         # client-side load balance
+with_retry(client, max_retries=3, ...)               # backoff wrapper
 ```
 
-### RemoteQueue
+### Task
 
 ```python
-remote = RemoteQueue("node-1", local=queue)     # local = MessageQueue you receive on
+@task(
+    queue=None,           # MessageQueue for pub-sub integration
+    topic=None,           # topic name (defaults to function name)
+    executor=None,        # Executor (defaults to a SEQUENTIAL Executor)
+    on_execute=None,      # list of observers
+    on_success=None,      # Callable[[TaskContext], None]
+    on_failure=None,      # Callable[[TaskContext], None]
+    on_complete=None,     # Callable[[TaskContext], None]
+    publish_result=True,  # auto-publish to {topic}.success / {topic}.failure
+    max_instances=None,   # concurrency cap (None = unlimited)
+    instance_timeout=None,
+)
+def my_task(x): ...
 
-remote.connect(node_id, host, port)             # Open + own a TCP link to a peer
-remote.disconnect(node_id)                       # Close that link (-> bool)
-remote.send(node_id, topic, payload)            # Push to ONE peer (-> msg_id)
-remote.broadcast(topic, payload)                # Push to ALL peers (-> {node: msg_id})
-remote.subscribe(topic, handler)                # Receive locally (-> sub_id)
-remote.on(topic)                                # Decorator form of subscribe
-remote.peers                                    # Connected peer node ids
-remote.close()                                  # Close every link + the local queue
+my_task(21)               # direct call -> result
+my_task.state            # SharedState across invocations
+my_task.pool.stats       # TaskPool stats when max_instances is set
 ```
 
 ## License

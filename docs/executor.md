@@ -2,6 +2,12 @@
 
 Unified task executor with sequential, thread, and process modes.
 
+`Executor` is the **local request-reply** layer: you submit a callable and
+get a value back. Its remote counterpart is [RPC](rpc.md) (`RPCClient.call`
+dispatches the same call/return to a worker process or machine). The
+[`@task`](task.md) decorator composes an `Executor` (via its `executor=`
+parameter) with a queue and observers.
+
 ## Overview
 
 `Executor` provides:
@@ -9,6 +15,10 @@ Unified task executor with sequential, thread, and process modes.
 - Task submission and result retrieval
 - Map operations for batch processing
 - Async/await support
+
+`SEQUENTIAL` runs the callable inline at submit time; `THREAD` and
+`PROCESS` submit to a pool and return a `task_id` you later resolve with
+`result(task_id)`.
 
 ## Execution Modes
 
@@ -195,6 +205,9 @@ class Executor:
         """Map function over items asynchronously."""
 ```
 
+> Note: `submit` accepts a `priority` keyword for signature compatibility,
+> but the current implementation does not prioritize the queue by it.
+
 ### ExecutionMode
 
 ```python
@@ -203,6 +216,18 @@ class ExecutionMode(str, Enum):
     THREAD = "thread"          # Use thread pool
     PROCESS = "process"        # Use process pool
 ```
+
+## Local vs Remote
+
+`Executor` is local request-reply. For the remote equivalent -- dispatching
+a call to a worker process or another machine and getting the value back --
+use [RPC](rpc.md): `RPCServer` registers methods and `RPCClient.call(name,
+*args)` invokes them over a `MessageQueue`. Both follow the same
+call-and-return shape; the difference is distance.
+
+To wire an `Executor` into the `@task` facade (so a decorated function runs
+through a thread/process pool with observers attached), pass it as
+`@task(executor=...)` -- see [Task Decorator](task.md).
 
 ### TaskResult
 

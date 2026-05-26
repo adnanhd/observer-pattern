@@ -2,13 +2,21 @@
 
 Remote Procedure Call over message queue.
 
+RPC is the **remote request-reply** layer -- the network counterpart to the
+local [`Executor`](executor.md). Both follow the same call-and-return shape;
+RPC just puts a `MessageQueue` (typically TCP-backed) between caller and
+callee.
+
 ## Overview
 
 eventforge provides RPC functionality via:
 - `RPCServer` - Registers and handles method calls
 - `RPCClient` - Makes remote method calls
 
-Both use `MessageQueue` as the transport layer.
+Both use `MessageQueue` as the transport layer. Run them over a TCP
+transport (`TCPServerTransport` / `TCPClientTransport`) to reach another
+process or machine; the client API is identical whether the server is
+in-process or across the network.
 
 ## Basic Usage
 
@@ -156,6 +164,48 @@ print(math_client.add(1, 2))        # 3
 print(string_client.concat("a", "b"))  # "ab"
 ```
 
+## Load Balancing and Retries
+
+`RoundRobinRPCClient` spreads calls across a pool of `RPCClient` instances
+(each typically pointed at a different worker); `with_retry` wraps a client
+with exponential-backoff retries. Both keep the same `call(name, *args)`
+surface.
+
+```python
+from eventforge import MessageQueue, RPCClient, RoundRobinRPCClient, with_retry
+from eventforge.transports.tcp import TCPClientTransport
+
+clients = []
+for port in (9090, 9091, 9092):
+    transport = TCPClientTransport(host="127.0.0.1", port=port)
+    transport.connect()
+    clients.append(RPCClient(MessageQueue(transport=transport), service_name="compute"))
+
+pool = RoundRobinRPCClient(clients)
+result = pool.call("heavy_computation", 100000)  # round-robined across workers
+
+# Wrap any client to retry on TimeoutError / ConnectionError.
+robust = with_retry(clients[0], max_retries=3, backoff_initial=0.1, backoff_factor=2.0)
+result = robust.call("heavy_computation", 100000)
+```
+
+## Running Task Logic Remotely
+
+`RPCClient` is how you dispatch a function that also has a local `@task`
+definition to a remote worker: register the function on the server (by the
+same name the client calls), then `client.call("name", *args)`. Locally the
+`@task` body runs through its `Executor`; remotely the worker runs the
+registered function and returns the value. See [Task Decorator](task.md) and
+`examples/07_distributed_workers.py`.
+
+For a no-boilerplate server, point the generic worker entrypoint at a module
+exposing a `HANDLERS` dict:
+
+```bash
+python -m eventforge.worker --import handlers --service compute --port 9090
+# handlers.py:  HANDLERS = {"heavy_computation": heavy_computation}
+```
+
 ## API Reference
 
 ### RPCServer
@@ -206,6 +256,30 @@ class RPCClient:
     
     def __getattr__(self, name: str) -> Callable:
         """Allow client.method_name(*args) syntax."""
+```
+
+### RoundRobinRPCClient
+
+```python
+class RoundRobinRPCClient:
+    def __init__(self, clients: list[RPCClient]):
+        """Dispatch call() round-robin across a pool of RPCClients."""
+
+    def call(self, method: str, *args, timeout: float = None, **kwargs) -> Any: ...
+```
+
+### with_retry
+
+```python
+def with_retry(
+    client: RPCClient,
+    *,
+    max_retries: int = 3,
+    backoff_initial: float = 0.1,
+    backoff_factor: float = 2.0,
+    retry_on: tuple[type[BaseException], ...] = (TimeoutError, ConnectionError),
+) -> RPCClient:
+    """Wrap a client so each call() retries with exponential backoff."""
 ```
 
 ### Request/Response Types
