@@ -30,8 +30,10 @@ lives. `@task` composes an `Executor` + a `MessageQueue` + `Observers`.
 pip install eventforge
 ```
 
-Core install pulls only `pydantic` + `typing-extensions`. The TCP transport
-is stdlib.
+Core install pulls only `pydantic` + `typing-extensions`. The Memory and TCP
+transports are stdlib. Optional extras: `eventforge[redis]` /
+`eventforge[nats]` for the broker-backed transports, `eventforge[logfire]`
+for Logfire emission.
 
 ## Quick Start
 
@@ -225,6 +227,8 @@ eventforge/
     base.py         # Transport ABC
     memory.py       # In-memory transport (default)
     tcp.py          # JSON-over-TCP server/client transports
+    redis.py        # Redis pub/sub transport (optional: [redis])
+    nats.py         # NATS pub/sub transport (optional: [nats])
   queue.py          # MessageQueue with pub-sub
   remote.py         # RemoteQueue push-only switchboard
   executor.py       # Executor (local request-reply)
