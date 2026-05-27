@@ -355,7 +355,7 @@ class RPCResponse(BaseModel):
 ```python
 from eventforge import MessageQueue, RPCServer, RPCClient
 
-# Shared queue (in production, use Redis/ZMQ transport)
+# Shared queue (in production, use a TCP, Redis, or NATS transport)
 queue = MessageQueue()
 
 # User service

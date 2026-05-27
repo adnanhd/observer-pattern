@@ -134,7 +134,7 @@ Disable with `publish_result=False`.
     topic=None,           # Topic name (defaults to function name)
     executor=None,        # Executor (default) -- how the body runs
                           #   in-process (inline / thread / process)
-    on_execute=None,      # List of Observer instances
+    on_execute=None,      # list of observers (AvgMeters, etc.)
     on_success=None,      # Callable[[TaskContext], None]
     on_failure=None,      # Callable[[TaskContext], None]
     on_complete=None,     # Callable[[TaskContext], None]
@@ -151,7 +151,7 @@ Disable with `publish_result=False`.
 | `queue` | `MessageQueue` | `None` | Queue for pub-sub. If provided with topic, subscribes automatically |
 | `topic` | `str` | Function name | Topic for queue subscription and result publishing |
 | `executor` | `Executor` | `Executor()` | Local execution backend: how the body runs in-process (inline / thread / process) |
-| `on_execute` | `List[Observer]` | `[]` | Observers called on start/end/error |
+| `on_execute` | `list` | `[]` | Observers (AvgMeters, etc.) wired to the start / success / failure / complete lifecycle |
 | `on_success` | `Callable` | `None` | Called on successful execution |
 | `on_failure` | `Callable` | `None` | Called on failed execution |
 | `on_complete` | `Callable` | `None` | Called after execution (success or failure) |

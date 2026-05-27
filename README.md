@@ -22,9 +22,10 @@ single-process path bypasses all transport overhead.
 pip install eventforge
 ```
 
-Core install pulls only `pydantic` + `typing-extensions`. The TCP
-transport is stdlib. Optional integrations (Pydantic Logfire, etc.)
-have their own extras documented in `docs/`.
+Core install pulls only `pydantic` + `typing-extensions`. The Memory and
+TCP transports are stdlib. Optional extras: `eventforge[redis]` and
+`eventforge[nats]` add the broker-backed transports; `eventforge[logfire]`
+adds Pydantic Logfire emission.
 
 ## Concepts
 
@@ -54,7 +55,8 @@ the network on a TCP transport. `@task` composes an `Executor` + an optional
 
 ## Transport Layer
 
-A `Transport` is the wire under a `MessageQueue`. Two ship in the box:
+A `Transport` is the wire under a `MessageQueue`. Two ship in the core; two
+more are available behind optional extras:
 
 - `MemoryTransport` -- in-process, thread-safe, the default. Zero
   serialization, zero sockets.
@@ -62,6 +64,16 @@ A `Transport` is the wire under a `MessageQueue`. Two ship in the box:
   length-prefixed JSON over a TCP socket (`[4-byte big-endian length][JSON]`),
   for cross-process / cross-machine delivery. The server must be
   `.start()`ed; the client must be `.connect()`ed.
+- `RedisTransport` -- broker-backed pub/sub over Redis `PUBLISH`/`PSUBSCRIBE`.
+  `pip install eventforge[redis]`, then
+  `from eventforge.transports.redis import RedisTransport`.
+- `NatsTransport` -- broker-backed pub/sub over NATS.
+  `pip install eventforge[nats]`, then
+  `from eventforge.transports.nats import NatsTransport`.
+
+The two optional transports lazy-import their dependency, so a plain
+`import eventforge` never requires `redis` or `nats`. They serialize the same
+JSON wire as TCP.
 
 All transports implement one small ABC, so they are interchangeable under
 `MessageQueue`, `RPCServer`, and `RPCClient`:
@@ -90,10 +102,15 @@ local = MessageQueue()
 transport = TCPServerTransport(host="127.0.0.1", port=9090)
 transport.start()
 networked = MessageQueue(transport=transport)
+
+# broker-backed: same MessageQueue API again
+from eventforge.transports.redis import RedisTransport
+brokered = MessageQueue(transport=RedisTransport(host="localhost", port=6379))
 ```
 
-Because the ABC is this small, you could add a Redis or NATS transport by
-implementing those six methods -- nothing else in the stack needs to know.
+The `RedisTransport` and `NatsTransport` above are exactly this pattern; the
+ABC is small enough that adding another (Kafka, ZeroMQ, ...) is just those six
+methods -- nothing above the transport needs to know.
 
 ## Messaging
 
