@@ -72,15 +72,16 @@ Attach observers for profiling and monitoring:
 from eventforge import TimingMeter, MetricsMeter
 
 timing = TimingMeter(threshold=1.0)
-metrics = MetricsMeter()
+# MetricsMeter pulls a number from each result; reduction="sum" counts calls.
+calls = MetricsMeter("calls", extract=lambda ctx: 1.0, reduction="sum")
 
-@task(on_execute=[timing, metrics])
+@task(on_execute=[timing, calls])
 def my_task(x):
     return x * 2
 
 my_task(21)
-print(timing.stats)   # {'count': 1, 'avg': 0.001, ...}
-print(metrics.stats)  # {'calls': 1, 'successes': 1, ...}
+print(timing.stats)   # {'value': 0.0001, 'count': 1.0}  -- value = mean elapsed
+print(calls.stats)    # {'value': 1.0, 'count': 1.0}     -- value = sum of calls
 ```
 
 ### Lifecycle Handlers
@@ -134,7 +135,7 @@ Disable with `publish_result=False`.
     topic=None,           # Topic name (defaults to function name)
     executor=None,        # Executor (default) -- how the body runs
                           #   in-process (inline / thread / process)
-    on_execute=None,      # list of observers (AvgMeters, etc.)
+    on_execute=None,      # list of observers (Meters, etc.)
     on_success=None,      # Callable[[TaskContext], None]
     on_failure=None,      # Callable[[TaskContext], None]
     on_complete=None,     # Callable[[TaskContext], None]
@@ -151,7 +152,7 @@ Disable with `publish_result=False`.
 | `queue` | `MessageQueue` | `None` | Queue for pub-sub. If provided with topic, subscribes automatically |
 | `topic` | `str` | Function name | Topic for queue subscription and result publishing |
 | `executor` | `Executor` | `Executor()` | Local execution backend: how the body runs in-process (inline / thread / process) |
-| `on_execute` | `list` | `[]` | Observers (AvgMeters, etc.) wired to the start / success / failure / complete lifecycle |
+| `on_execute` | `list` | `[]` | Observers (Meters, etc.) wired to the start / success / failure / complete lifecycle |
 | `on_success` | `Callable` | `None` | Called on successful execution |
 | `on_failure` | `Callable` | `None` | Called on failed execution |
 | `on_complete` | `Callable` | `None` | Called after execution (success or failure) |
@@ -379,7 +380,7 @@ for item in large_dataset:
     analyzed_task(item)
 
 # View statistics
-print(f"Avg time: {timing.stats['avg']:.3f}s")
+print(f"Avg time: {timing.stats['value']:.3f}s")
 print(f"Success rate: {metrics.stats['success_rate']:.1%}")
 print(f"Peak memory: {memory.stats['max_peak'] / 1024 / 1024:.1f}MB")
 ```

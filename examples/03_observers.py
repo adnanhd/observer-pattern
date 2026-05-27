@@ -1,11 +1,11 @@
 """Observers -- profiling and monitoring task execution.
 
-Meters attach to a task via ``@task(on_execute=[...])`` and accumulate a
-running aggregate exposed as ``.stats == {val, avg, sum, count}``. A
-``Reporter`` reacts to every AvgMeter's ``"measurement"`` emission via
-``@observe(MeterCls, "measurement")``.
+Meters attach to a task via ``@task(on_execute=[...])`` and accumulate
+observations into one reduced ``.stats == {value, count}`` -- the reduction
+(``"mean"`` / ``"max"`` / ...) is chosen per meter. A ``Reporter`` reacts to
+every Meter's ``"measurement"`` emission via ``@observe(MeterCls, "measurement")``.
 
-Demonstrates: TimingMeter, MetricsMeter, MemoryMeter, a custom AvgMeter, and a
+Demonstrates: TimingMeter, MetricsMeter, MemoryMeter, a custom Meter, and a
 Reporter.
 """
 
@@ -13,8 +13,8 @@ import time
 from typing import Any
 
 from eventforge import (
-    AvgMeter,
     MemoryMeter,
+    Meter,
     MetricsMeter,
     Reporter,
     TimingMeter,
@@ -60,10 +60,10 @@ def main() -> None:
     allocate()
     print(f"memory.stats: {memory.stats}")
 
-    # --- Custom AvgMeter: override measure() ---------------------------------
-    print("\n=== Custom AvgMeter ===")
+    # --- Custom Meter: override measure() ---------------------------------
+    print("\n=== Custom Meter ===")
 
-    class RowCountMeter(AvgMeter):
+    class RowCountMeter(Meter):
         def measure(self, ctx: Any) -> float:
             return float(len(ctx.result))
 

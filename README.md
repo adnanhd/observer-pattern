@@ -362,12 +362,14 @@ def simple_function(x):
 
 Built-in observers:
 
-- `TimingMeter` -- execution timing with threshold alerts
-- `MetricsMeter` -- call counts, success/failure rates
-- `MemoryMeter` -- memory usage tracking
-- `CPUMeter` -- CPU usage tracking
-- `AvgMeter` -- running averages (for training loops)
-- `LoggingReporter` -- structured logging
+- `Meter` -- base aggregator; `reduction=` picks how observations collapse to
+  one `value` (`"mean"` / `"max"` / `"min"` / `"sum"` / `"last"` / `"count"`).
+  `stats == {value, count}`. Subclasses pass a default reduction you can override.
+- `TimingMeter` -- per-call elapsed time (reduction `"mean"`), threshold alerts
+- `MemoryMeter` -- per-call memory delta (reduction `"max"`, i.e. peak)
+- `CPUMeter` -- per-call CPU time (reduction `"mean"`)
+- `MetricsMeter` -- a number pulled from each result via an extractor fn
+- `LoggingReporter` -- structured logging of meter emissions
 
 The core primitive underneath is `Observable` / `Eventful` / `Dispatcher`
 (`BroadcastDispatcher`, `RoundRobinDispatcher`, `ConcurrentDispatcher`,

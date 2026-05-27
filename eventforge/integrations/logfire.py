@@ -26,7 +26,7 @@ Usage with the ``@task`` decorator::
     runner.run(epoch=1)
 
 Or with the ``@observe`` decorator -- since :class:`LogfireMeter` is
-itself a :class:`~eventforge.AvgMeter`, you wire it the same way as the
+itself a :class:`~eventforge.Meter`, you wire it the same way as the
 other built-in meters (TimingMeter, MemoryMeter, ...).
 """
 
@@ -44,11 +44,11 @@ except ImportError as e:  # pragma: no cover
         "Install it with: pip install eventforge[logfire]"
     ) from e
 
-from eventforge.observers import AvgMeter, Context
+from eventforge.observers import Context, Meter
 
 
-class LogfireMeter(AvgMeter):
-    """AvgMeter that opens / closes a Logfire span per task execution.
+class LogfireMeter(Meter):
+    """Meter that opens / closes a Logfire span per task execution.
 
     Each lifecycle call attaches more attributes to the active span:
 
@@ -71,7 +71,7 @@ class LogfireMeter(AvgMeter):
         tags: Static tags applied to every span.
 
     Inherits the ``measurement`` / ``update_event`` / ``reset_event``
-    channels from :class:`AvgMeter` for symmetry with the other meters,
+    channels from :class:`Meter` for symmetry with the other meters,
     but does not call ``update()`` itself -- Logfire is the sink.
     """
 
@@ -158,7 +158,7 @@ class LogfireMeter(AvgMeter):
 
     def on_success(self, ctx: Context) -> None:
         # Don't aggregate -- Logfire is the sink, not the running mean.
-        # Skip the AvgMeter superclass's update / measurement.fire path.
+        # Skip the Meter superclass's update / measurement.fire path.
         self._close_span(ctx)
 
     def on_failure(self, ctx: Context) -> None:

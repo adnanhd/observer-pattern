@@ -17,8 +17,9 @@ The model is `Observable` + `Eventful` + `Dispatcher`:
   `obj.success.on(fn)` or `obj.on("success", fn)`.
 - `Eventful` -- one pub-sub channel. `.on(fn)` subscribes, `.fire(*args)`
   dispatches.
-- `AvgMeter` -- `Observable` subclass that measures one value per task call,
-  keeps a running average (`val`/`avg`/`sum`/`count`), and emits a
+- `Meter` -- `Observable` subclass that measures one value per task call,
+  accumulates observations and exposes one reduced `value` chosen by
+  `reduction=` (default `"mean"`); `stats == {value, count}`. Emits a
   `measurement` event.
 - `Reporter` -- `Observable` subclass that auto-subscribes its
   `@observe(MeterCls, "event")`-marked methods to upstream Meters.
@@ -43,17 +44,20 @@ def my_function(x):
 my_function(10)
 my_function(20)
 
-print(timing.stats)   # {'val': ..., 'avg': ..., 'sum': ..., 'count': 2}
-print(metrics.stats)  # {'val': 40.0, 'avg': 30.0, 'sum': 60.0, 'count': 2}
+print(timing.stats)   # {'value': <mean elapsed>, 'count': 2.0}
+print(metrics.stats)  # {'value': 30.0, 'count': 2.0}  # mean of 20.0 and 40.0
 ```
 
 `on_execute` accepts any number of meters; each is wired to the task's
-lifecycle channels via `AvgMeter.attach(task)`.
+lifecycle channels via `Meter.attach(task)`.
 
 ## Built-in Observers
 
-All meters share the same `stats` shape: `{'val', 'avg', 'sum', 'count'}`.
-`val` is the last observation, `avg` the running mean.
+All meters share the same `stats` shape: `{'value', 'count'}`, where `value`
+is the single reduced metric chosen by `reduction=` (default `"mean"`; the
+choices are `"mean"`, `"max"`, `"min"`, `"sum"`, `"last"`, `"count"`). An
+unknown reduction name raises `ValueError`. Subclasses pass a sensible default
+reduction (e.g. `MemoryMeter` defaults to `"max"`) that you can override.
 
 ### TimingMeter
 
@@ -72,7 +76,7 @@ def slow_function():
 slow_function()
 
 print(timing.stats)
-# {'val': 1.5, 'avg': 1.5, 'sum': 1.5, 'count': 1}
+# {'value': 1.5, 'count': 1.0}   # mean elapsed (default reduction="mean")
 ```
 
 When a call exceeds `threshold`, `ctx.metadata["timing_exceeded"]` is set.
@@ -95,16 +99,18 @@ train_step(0)
 train_step(1)
 
 print(loss.stats)
-# {'val': 0.49, 'avg': 0.495, 'sum': 0.99, 'count': 2}
+# {'value': 0.495, 'count': 2.0}   # mean of 0.5 and 0.49 (default reduction="mean")
 ```
 
 If the extractor raises or returns `None`, no measurement is recorded for
-that call.
+that call. Pass `reduction=` to change how the value is reduced, e.g.
+`MetricsMeter("hits", extract=..., reduction="sum")` accumulates a running
+total instead of a mean.
 
 ### LoggingReporter
 
 `LoggingReporter` is a `Reporter`: instantiating one auto-subscribes it to
-the `measurement` event of *every* `AvgMeter` in the process via stdlib
+the `measurement` event of *every* `Meter` in the process via stdlib
 logging. You do not pass it to `on_execute`; you just construct it.
 
 ```python
@@ -113,7 +119,7 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-LoggingReporter(log_args=True, log_result=True)  # logs all AvgMeter measurements
+LoggingReporter(log_args=True, log_result=True)  # logs all Meter measurements
 
 timing = TimingMeter()
 
@@ -132,7 +138,7 @@ Tracks per-call memory delta via `tracemalloc`:
 ```python
 from eventforge import task, MemoryMeter
 
-memory = MemoryMeter()
+memory = MemoryMeter()  # default reduction="max" -- value is the peak delta
 
 @task(on_execute=[memory])
 def allocate():
@@ -141,7 +147,7 @@ def allocate():
 allocate()
 
 print(memory.stats)
-# {'val': 4000000.0, 'avg': 4000000.0, 'sum': 4000000.0, 'count': 1}
+# {'value': 4000000.0, 'count': 1.0}   # peak memory delta (default reduction="max")
 # ctx.metadata["memory_peak"] also holds the tracemalloc peak.
 ```
 
@@ -161,19 +167,22 @@ def compute():
 compute()
 
 print(cpu.stats)
-# {'val': 0.05, 'avg': 0.05, 'sum': 0.05, 'count': 1}
+# {'value': 0.05, 'count': 1.0}   # mean CPU time (default reduction="mean")
 ```
 
-## AvgMeter Aggregator
+## Meter Aggregator
 
-A bare `AvgMeter` is a running-average tracker you drive manually with
-`update()`. Useful for training-loop metrics independent of tasks:
+A bare `Meter` is an aggregator you drive manually with `update()`: it
+accumulates observations and exposes one reduced `value` chosen by
+`reduction=` (default `"mean"`). Useful for training-loop metrics independent
+of tasks:
 
 ```python
-from eventforge import AvgMeter
+from eventforge import Meter
 
-loss_meter = AvgMeter("loss")
-acc_meter = AvgMeter("accuracy")
+loss_meter = Meter("loss")                  # default reduction="mean"
+acc_meter = Meter("accuracy")
+peak_meter = Meter("peak", reduction="max")  # override the default reduction
 
 # Training loop
 for batch in range(10):
@@ -182,17 +191,21 @@ for batch in range(10):
 
     loss_meter.update(loss)
     acc_meter.update(acc)
+    peak_meter.update(acc)
 
-print(f"Loss: {loss_meter.avg:.4f}")
-print(f"Accuracy: {acc_meter.avg:.4f}")
+print(f"Loss: {loss_meter.value:.4f}")          # mean loss
+print(f"Accuracy: {acc_meter.value:.4f}")       # mean accuracy
+print(f"Peak accuracy: {peak_meter.value:.4f}")  # max observed
 
 # Reset for next epoch
 loss_meter.reset()
 acc_meter.reset()
 ```
 
-`update(val, n=1)` updates `val`/`avg`/`sum`/`count` and fires the
-`update_event` channel; `reset()` clears state and fires `reset_event`.
+`update(val, n=1)` accumulates the observation and fires the `update_event`
+channel; `.value` returns the single reduced metric and `.stats` is
+`{value, count}`. `reset()` clears state and fires `reset_event`. An unknown
+`reduction=` name raises `ValueError`.
 
 ## Combining Multiple Observers
 
@@ -209,7 +222,7 @@ def my_function():
     return list(range(42))
 ```
 
-Equivalently, attach meters to any `Observable` (or another `AvgMeter`) by
+Equivalently, attach meters to any `Observable` (or another `Meter`) by
 hand with `meter.attach(source)`, or subscribe to channels directly:
 
 ```python
@@ -230,17 +243,18 @@ work()
 
 There is no `Observer` base class. Extend the system one of three ways.
 
-### Custom AvgMeter
+### Custom Meter
 
-Subclass `AvgMeter` and override `measure(ctx) -> float | None` (and optionally
-`on_start` to stash a baseline). The default `on_success` calls `measure`,
-updates the running average, and fires `self.measurement`:
+Subclass `Meter` and override `measure(self, ctx) -> float | None` (and
+optionally `on_start` to stash a baseline). The default `on_success` calls
+`measure`, accumulates the observation, and fires `self.measurement`.
+Construct as `MyMeter("name")` or `MyMeter("name", reduction="max")`:
 
 ```python
-from eventforge import task, AvgMeter
+from eventforge import task, Meter
 from eventforge.observers import Context
 
-class GPUMemoryMeter(AvgMeter):
+class GPUMemoryMeter(Meter):
     """Track GPU memory delta (requires torch)."""
 
     name = "gpu_mem"
@@ -259,7 +273,7 @@ class GPUMemoryMeter(AvgMeter):
         ctx.metadata["gpu_mem_peak"] = torch.cuda.max_memory_allocated()
         return float(torch.cuda.memory_allocated() - start)
 
-gpu = GPUMemoryMeter()
+gpu = GPUMemoryMeter(reduction="max")  # value is the peak GPU memory delta
 
 @task(on_execute=[gpu])
 def gpu_computation():
@@ -267,7 +281,7 @@ def gpu_computation():
     x = torch.randn(1000, 1000, device="cuda")
     return x @ x.T
 
-print(gpu.stats)  # running average of the GPU memory delta
+print(gpu.stats)  # {'value': <peak GPU memory delta>, 'count': N.0}
 ```
 
 ### Custom Reporter
@@ -278,18 +292,18 @@ instance of `MeterCls` (and its subclasses). Use this to ship measurements
 somewhere -- a totals counter, a metrics backend, etc.:
 
 ```python
-from eventforge import Reporter, AvgMeter, TimingMeter, task, observe
+from eventforge import Reporter, Meter, TimingMeter, task, observe
 from eventforge.observers import Context
 
 class TotalsReporter(Reporter):
-    """Sum every measurement emitted by any AvgMeter."""
+    """Sum every measurement emitted by any Meter."""
 
     def __init__(self) -> None:
         self.total = 0.0
         super().__init__()  # auto-wires the @observe method below
 
-    @observe(AvgMeter, "measurement")
-    def _on_measurement(self, meter: AvgMeter, value, ctx: Context) -> None:
+    @observe(Meter, "measurement")
+    def _on_measurement(self, meter: Meter, value, ctx: Context) -> None:
         if value is not None:
             self.total += value
 
@@ -389,20 +403,28 @@ def observe(target_cls: type, event: str):
     target_cls.<event>. Wired at the Reporter's __init__."""
 ```
 
-### AvgMeter
+### Meter
 
 ```python
-class AvgMeter(Observable):
+class Meter(Observable):
     name: str = "meter"
 
-    def __init__(self, name=None, dispatcher=None): ...
+    # reduction is a string validated against REDUCTIONS =
+    # {"mean", "max", "min", "sum", "last", "count"}; unknown -> ValueError.
+    def __init__(self, name=None, *, reduction: str = "mean", dispatcher=None): ...
 
     # aggregator
     def update(self, val: float, n: int = 1) -> None: ...
     def reset(self) -> None: ...
 
     @property
-    def stats(self) -> dict[str, float]: ...   # {'val','avg','sum','count'}
+    def reduction(self) -> str: ...            # the reduction name
+
+    @property
+    def value(self) -> float: ...              # the single reduced metric
+
+    @property
+    def stats(self) -> dict[str, float]: ...   # {'value', 'count'}
 
     # lifecycle convention (override measure / on_start as needed)
     def measure(self, ctx) -> float | None: ...
@@ -411,7 +433,7 @@ class AvgMeter(Observable):
     def on_failure(self, ctx) -> None: ...
     def on_complete(self, ctx) -> None: ...
 
-    def attach(self, source: Observable) -> "AvgMeter": ...
+    def attach(self, source: Observable) -> "Meter": ...
 
     # Emission channels (Eventful):
     #   measurement   fires (meter, value, ctx) after each on_success
@@ -422,15 +444,41 @@ class AvgMeter(Observable):
 ### TimingMeter
 
 ```python
-class TimingMeter(AvgMeter):
-    def __init__(self, threshold: float | None = None, name: str = "timing"): ...
+class TimingMeter(Meter):
+    def __init__(
+        self,
+        threshold: float | None = None,
+        name: str = "timing",
+        *,
+        reduction: str = "mean",
+    ): ...
 ```
 
 ### MetricsMeter
 
 ```python
-class MetricsMeter(AvgMeter):
-    def __init__(self, name: str, extract: Callable[[Context], float | None]): ...
+class MetricsMeter(Meter):
+    def __init__(
+        self,
+        name: str,
+        extract: Callable[[Context], float | None],
+        *,
+        reduction: str = "mean",
+    ): ...
+```
+
+### MemoryMeter
+
+```python
+class MemoryMeter(Meter):
+    def __init__(self, name: str = "memory", *, reduction: str = "max"): ...
+```
+
+### CPUMeter
+
+```python
+class CPUMeter(Meter):
+    def __init__(self, name: str = "cpu", *, reduction: str = "mean"): ...
 ```
 
 ### Reporter
@@ -445,11 +493,11 @@ class Reporter(Observable):
 ### Training Loop Profiling
 
 ```python
-from eventforge import task, TimingMeter, AvgMeter
+from eventforge import task, TimingMeter, Meter
 
 forward_timer = TimingMeter(name="forward")
-loss_meter = AvgMeter("loss")
-acc_meter = AvgMeter("accuracy")
+loss_meter = Meter("loss")
+acc_meter = Meter("accuracy")
 
 @task(on_execute=[forward_timer])
 def forward_pass(model, x):
@@ -469,8 +517,8 @@ for epoch in range(10):
         loss_meter.update(loss.item())
         acc_meter.update(accuracy(output, target))
 
-    print(f"Epoch {epoch}: loss={loss_meter.avg:.4f}, acc={acc_meter.avg:.4f}")
-    print(f"  Forward: {forward_timer.stats['avg']*1000:.2f}ms")
+    print(f"Epoch {epoch}: loss={loss_meter.value:.4f}, acc={acc_meter.value:.4f}")
+    print(f"  Forward: {forward_timer.stats['value']*1000:.2f}ms")
 ```
 
 ### API Endpoint Monitoring
@@ -489,5 +537,5 @@ def api_handler(request):
 
 # After some requests
 print(f"Total calls: {status.stats['count']}")
-print(f"Avg response time: {timing.stats['avg']*1000:.2f}ms")
+print(f"Avg response time: {timing.stats['value']*1000:.2f}ms")
 ```
