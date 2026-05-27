@@ -1,4 +1,4 @@
-"""Tests for Observable / Eventful / AvgMeter / Reporter and dispatchers."""
+"""Tests for Observable / Eventful / Meter / Reporter and dispatchers."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from eventforge import (
-    AvgMeter,
     BroadcastDispatcher,
     ConcurrentDispatcher,
     Eventful,
     ExecutionContext,
     LeastLoadedDispatcher,
+    Meter,
     MetricsMeter,
     Node,
     Observable,
@@ -206,33 +206,46 @@ class TestNode:
 
 
 # =============================================================================
-# AvgMeter
+# Meter
 # =============================================================================
 
 
 class TestMeter:
-    def test_aggregator(self):
-        m = AvgMeter("loss")
+    def test_aggregator_default_mean(self):
+        m = Meter("loss")  # default reduction="mean"
         m.update(2.0)
         m.update(4.0)
         m.update(6.0)
-        assert m.stats == {"val": 6.0, "avg": 4.0, "sum": 12.0, "count": 3}
+        assert m.stats == {"value": 4.0, "count": 3.0}
+        assert m.reduction == "mean"
+
+    def test_reduction_max(self):
+        m = Meter("peak", reduction="max")
+        m.update(2.0)
+        m.update(6.0)
+        m.update(4.0)
+        assert m.value == 6.0
+        assert m.stats == {"value": 6.0, "count": 3.0}
+
+    def test_unknown_reduction_raises(self):
+        with pytest.raises(ValueError):
+            Meter("x", reduction="bogus")
 
     def test_reset_clears_state(self):
-        m = AvgMeter("x")
+        m = Meter("x")
         m.update(5.0)
         m.reset()
-        assert m.stats == {"val": 0.0, "avg": 0.0, "sum": 0.0, "count": 0}
+        assert m.stats == {"value": 0.0, "count": 0.0}
 
     def test_update_event_fires(self):
-        m = AvgMeter("y")
+        m = Meter("y")
         seen = []
         m.update_event.on(lambda meter, val, n: seen.append((meter.name, val, n)))
         m.update(7.0, n=2)
         assert seen == [("y", 7.0, 2)]
 
     def test_measurement_fires_on_success(self):
-        class _MyMeter(AvgMeter):
+        class _MyMeter(Meter):
             def measure(self, ctx):
                 return 0.99
 
@@ -249,7 +262,7 @@ class TestMeter:
 
 class TestMeterAttach:
     def test_attach_wires_on_success(self):
-        m = AvgMeter("x")
+        m = Meter("x")
         seen = []
         m.measurement.on(lambda meter, val, ctx: seen.append("fired"))
 
@@ -309,7 +322,7 @@ class TestConcreteMeters:
         time.sleep(0.005)
         m.on_success(ctx)
         assert m.stats["count"] == 1
-        assert m.stats["val"] >= 0.004
+        assert m.stats["value"] >= 0.004
 
     def test_metrics_meter_extracts(self):
         m = MetricsMeter("loss", extract=lambda ctx: ctx.result["loss"])
@@ -320,4 +333,4 @@ class TestConcreteMeters:
             result={"loss": 0.42},
         )
         m.on_success(ctx)
-        assert m.stats["val"] == 0.42
+        assert m.stats["value"] == 0.42

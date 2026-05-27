@@ -25,15 +25,19 @@ Core concepts
                     gpus, handler) + load metric. Used by resource-aware
                     dispatchers for cluster-style scheduling.
 
-``AvgMeter``           ``Observable`` subclass with running-average state
-                    (val/avg/sum/count) + ``on_start`` / ``on_success`` /
-                    ``on_failure`` / ``on_complete`` convention methods.
-                    Auto-emits ``"measurement"`` after each ``on_success``.
+``Meter``           ``Observable`` subclass that accumulates observations and
+                    exposes one reduced ``value`` chosen by ``reduction=``
+                    ("mean" / "max" / "min" / "sum" / "last" / "count");
+                    ``stats == {value, count}``. Has ``on_start`` /
+                    ``on_success`` / ``on_failure`` / ``on_complete`` convention
+                    methods; auto-emits ``"measurement"`` after each
+                    ``on_success``. Subclasses (TimingMeter, MemoryMeter, ...)
+                    pass a default reduction the caller may override.
 
 ``Reporter``        ``Observable`` subclass that auto-subscribes methods
                     marked with ``@observe(MeterCls, "event")`` at
                     ``__init__`` -- not a task lifecycle listener, only
-                    reacts to upstream AvgMeter emissions.
+                    reacts to upstream Meter emissions.
 
 Lifecycle event names (extensible; just call ``self.fire("name", ...)``):
 
@@ -256,7 +260,7 @@ class Eventful:
         self._lock = threading.Lock()
         # When owner+name are set, fire() also walks owner's MRO for
         # class-level subscribers. Avoids the previous monkey-patch
-        # approach where AvgMeter.__init__ was rewritten to wrap channel.fire.
+        # approach where Meter.__init__ was rewritten to wrap channel.fire.
         self._owner = owner
         self._name = name
 
@@ -432,18 +436,57 @@ class Node:
 
 
 # =============================================================================
-# AvgMeter -- Observable + aggregator + lifecycle convention
+# Meter -- Observable + aggregator + lifecycle convention
 # =============================================================================
 
 
-class AvgMeter(Observable):
+def _reduce_mean(m: Meter) -> float:
+    return m.sum / m.count if m.count else 0.0
+
+
+def _reduce_sum(m: Meter) -> float:
+    return m.sum
+
+
+def _reduce_max(m: Meter) -> float:
+    return m.max_val if m.count else 0.0
+
+
+def _reduce_min(m: Meter) -> float:
+    return m.min_val if m.count else 0.0
+
+
+def _reduce_last(m: Meter) -> float:
+    return m.last
+
+
+def _reduce_count(m: Meter) -> float:
+    return float(m.count)
+
+
+# Reduction is a *string-secured* argument: callers pass a name, not a raw
+# callable, so only these validated reducers can run. Child meters pass a
+# sensible default (TimingMeter "mean", MemoryMeter "max", ...) that the caller
+# may still override via ``reduction=``.
+REDUCTIONS: dict[str, Callable[[Meter], float]] = {
+    "mean": _reduce_mean,
+    "sum": _reduce_sum,
+    "max": _reduce_max,
+    "min": _reduce_min,
+    "last": _reduce_last,
+    "count": _reduce_count,
+}
+
+
+class Meter(Observable):
     """Aggregator + lifecycle observer + emission source.
 
     Three roles in one:
 
-    1. **Aggregator** -- running average across calls. ``update(val, n)``
-       maintains ``val / avg / sum / count``; fires ``self.update_event``
-       on each update.
+    1. **Aggregator** -- accumulates observations and exposes one reduced
+       ``value`` chosen by ``reduction=`` ("mean" / "max" / "min" / "sum" /
+       "last" / "count"). ``update(val, n)`` maintains the running state;
+       fires ``self.update_event`` on each update.
 
     2. **Lifecycle observer** -- ``attach(source)`` subscribes
        ``self.on_start`` / ``on_success`` / ``on_failure`` / ``on_complete``
@@ -461,8 +504,15 @@ class AvgMeter(Observable):
     def __init__(
         self,
         name: str | None = None,
+        *,
+        reduction: str = "mean",
         dispatcher: Dispatcher | None = None,
     ) -> None:
+        if reduction not in REDUCTIONS:
+            raise ValueError(
+                f"unknown reduction {reduction!r}; choose from {sorted(REDUCTIONS)}"
+            )
+        self._reduction = reduction
         if name is not None:
             self.name = name
         # Emission channels
@@ -485,27 +535,42 @@ class AvgMeter(Observable):
     # ---- aggregator ----------------------------------------------------
 
     def reset(self) -> None:
-        self.val: float = 0.0
-        self.avg: float = 0.0
+        self.last: float = 0.0
         self.sum: float = 0.0
         self.count: int = 0
+        self.max_val: float = 0.0
+        self.min_val: float = 0.0
         self.reset_event.fire(self)
 
     def update(self, val: float, n: int = 1) -> None:
-        self.val = val
+        if self.count == 0:
+            self.max_val = self.min_val = val
+        else:
+            self.max_val = max(self.max_val, val)
+            self.min_val = min(self.min_val, val)
+        self.last = val
         self.sum += val * n
         self.count += n
-        self.avg = self.sum / self.count if self.count > 0 else 0.0
         self.update_event.fire(self, val, n)
 
     @property
+    def reduction(self) -> str:
+        """The reduction name applied to produce ``value`` / ``stats``."""
+        return self._reduction
+
+    @property
+    def value(self) -> float:
+        """The single reduced metric, per the ``reduction`` (e.g. mean / max)."""
+        return REDUCTIONS[self._reduction](self)
+
+    @property
     def stats(self) -> dict[str, float]:
-        return {"val": self.val, "avg": self.avg, "sum": self.sum, "count": self.count}
+        return {"value": self.value, "count": float(self.count)}
 
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}({self.name}: "
-            f"avg={self.avg:.4f}, count={self.count})"
+            f"{self._reduction}={self.value:.4f}, count={self.count})"
         )
 
     # ---- lifecycle convention ------------------------------------------
@@ -531,13 +596,13 @@ class AvgMeter(Observable):
     def on_complete(self, ctx: Context) -> None:
         """finally: -- always. Default no-op."""
 
-    def attach(self, source: Observable) -> AvgMeter:
+    def attach(self, source: Observable) -> Meter:
         """Wire each ``on_<event>`` method as a subscriber to ``source.<event>``.
 
         Convention: method ``on_X`` -> subscribed to event ``"X"``. Returns
-        ``self`` for chaining (``AvgMeter().attach(task)``).
+        ``self`` for chaining (``Meter().attach(task)``).
 
-        The ``on_X`` method scan is cached per AvgMeter subclass via
+        The ``on_X`` method scan is cached per Meter subclass via
         ``_meter_event_names`` so attach() runs in O(channels) rather than
         re-walking ``dir(type(self))`` on every call.
         """
@@ -557,13 +622,13 @@ _METER_EVENT_NAMES_LOCK = threading.Lock()
 
 
 def _meter_event_names(meter_cls: type) -> tuple[str, ...]:
-    """Cached scan of ``on_X`` callables on a AvgMeter subclass.
+    """Cached scan of ``on_X`` callables on a Meter subclass.
 
     ``dir()`` + ``startswith`` cost ~43 string ops per attach for a typical
-    AvgMeter; that scan is identical across all instances of the same class
+    Meter; that scan is identical across all instances of the same class
     and across repeated attaches of the same instance, so we memoize it.
 
-    Backed by a ``WeakKeyDictionary`` so dynamically defined AvgMeter
+    Backed by a ``WeakKeyDictionary`` so dynamically defined Meter
     subclasses (e.g. one declared inside a test or factory function) can
     be garbage-collected normally -- the cache entry vanishes with them.
     """
@@ -608,7 +673,7 @@ class Reporter(Observable):
     Example::
 
         class LoggingReporter(Reporter):
-            @observe(AvgMeter, "measurement")
+            @observe(Meter, "measurement")
             def log_measurement(self, meter, value, ctx):
                 logger.info("%s = %s", meter.name, value)
     """
@@ -714,13 +779,19 @@ def observe(
 # =============================================================================
 
 
-class TimingMeter(AvgMeter):
+class TimingMeter(Meter):
     """Tracks per-call elapsed wall time."""
 
     name = "timing"
 
-    def __init__(self, threshold: float | None = None, name: str = "timing") -> None:
-        super().__init__(name=name)
+    def __init__(
+        self,
+        threshold: float | None = None,
+        name: str = "timing",
+        *,
+        reduction: str = "mean",
+    ) -> None:
+        super().__init__(name=name, reduction=reduction)
         self.threshold = threshold
 
     def on_start(self, ctx: Context) -> None:
@@ -734,13 +805,13 @@ class TimingMeter(AvgMeter):
         return elapsed
 
 
-class MemoryMeter(AvgMeter):
+class MemoryMeter(Meter):
     """Tracks per-call memory delta via :mod:`tracemalloc`."""
 
     name = "memory"
 
-    def __init__(self, name: str = "memory") -> None:
-        super().__init__(name=name)
+    def __init__(self, name: str = "memory", *, reduction: str = "max") -> None:
+        super().__init__(name=name, reduction=reduction)
 
     def on_start(self, ctx: Context) -> None:
         if not tracemalloc.is_tracing():
@@ -755,13 +826,13 @@ class MemoryMeter(AvgMeter):
         return float(current - start)
 
 
-class CPUMeter(AvgMeter):
+class CPUMeter(Meter):
     """Tracks per-call user+system CPU time via :func:`resource.getrusage`."""
 
     name = "cpu"
 
-    def __init__(self, name: str = "cpu") -> None:
-        super().__init__(name=name)
+    def __init__(self, name: str = "cpu", *, reduction: str = "mean") -> None:
+        super().__init__(name=name, reduction=reduction)
 
     def on_start(self, ctx: Context) -> None:
         ru = resource.getrusage(resource.RUSAGE_SELF)
@@ -773,15 +844,17 @@ class CPUMeter(AvgMeter):
         return float((ru.ru_utime + ru.ru_stime) - start)
 
 
-class MetricsMeter(AvgMeter):
+class MetricsMeter(Meter):
     """Pulls a single numeric metric from ``ctx.result`` via an extractor fn."""
 
     def __init__(
         self,
         name: str,
         extract: Callable[[Context], float | None],
+        *,
+        reduction: str = "mean",
     ) -> None:
-        super().__init__(name=name)
+        super().__init__(name=name, reduction=reduction)
         self._extract = extract
 
     def measure(self, ctx: Context) -> float | None:
@@ -797,10 +870,10 @@ class MetricsMeter(AvgMeter):
 
 
 class LoggingReporter(Reporter):
-    """Logs every AvgMeter's ``measurement`` event via stdlib logging.
+    """Logs every Meter's ``measurement`` event via stdlib logging.
 
-    Subscribes to :class:`AvgMeter` (MRO walk catches all subclasses), so a
-    single ``LoggingReporter()`` reports for every AvgMeter instance in the
+    Subscribes to :class:`Meter` (MRO walk catches all subclasses), so a
+    single ``LoggingReporter()`` reports for every Meter instance in the
     process.
     """
 
@@ -817,8 +890,8 @@ class LoggingReporter(Reporter):
         self._log = logging.getLogger(logger_name)
         super().__init__()
 
-    @observe(AvgMeter, "measurement")
-    def _on_measurement(self, meter: AvgMeter, value: Any, ctx: Context) -> None:
+    @observe(Meter, "measurement")
+    def _on_measurement(self, meter: Meter, value: Any, ctx: Context) -> None:
         msg = f"{meter.name} = {value}"
         if self._log_args:
             msg += f" args={ctx.args!r} kwargs={ctx.kwargs!r}"

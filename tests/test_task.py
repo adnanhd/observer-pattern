@@ -178,12 +178,13 @@ class TestTaskDecorator:
 
         assert result == 42
         assert timing.stats["count"] == 1
-        assert timing.stats["avg"] >= 0.01
+        assert timing.stats["value"] >= 0.01
 
     def test_task_with_multiple_observers(self):
         timing = TimingMeter()
-        # MetricsMeter pulls a number out of ctx.result for each call.
-        calls = MetricsMeter("calls", extract=lambda ctx: 1.0)
+        # MetricsMeter pulls a number out of ctx.result for each call;
+        # reduction="sum" turns it into a call counter.
+        calls = MetricsMeter("calls", extract=lambda ctx: 1.0, reduction="sum")
 
         @task(on_execute=[timing, calls])
         def my_task(x):
@@ -194,7 +195,7 @@ class TestTaskDecorator:
 
         assert timing.stats["count"] == 2
         assert calls.stats["count"] == 2
-        assert calls.stats["sum"] == 2.0
+        assert calls.stats["value"] == 2.0
 
     def test_task_exposes_state(self):
         @task()
