@@ -241,3 +241,16 @@ eventforge/
 ## License
 
 MIT
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+
+task
+queue
+executor
+rpc
+remote
+observers
+types
+```
