@@ -1,0 +1,18 @@
+# Mirrors the build.yaml lint + type-check gates so failures are caught before commit.
+# Enable once per clone:  pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+      - id: ruff-format
+
+  # mypy needs the project's installed deps, so run it from the local env.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: mypy eventforge/
+        language: system
+        types: [python]
+        pass_filenames: false
