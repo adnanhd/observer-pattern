@@ -48,6 +48,7 @@ Lifecycle event names (extensible; just call ``self.fire("name", ...)``):
 """
 
 from __future__ import annotations
+from typing import Dict, List, Optional, Tuple, Union
 
 import logging
 import resource
@@ -95,13 +96,13 @@ class ExecutionContext:
     """
 
     func_name: str
-    args: tuple[Any, ...]
-    kwargs: dict[str, Any]
+    args: Tuple[Any, ...]
+    kwargs: Dict[str, Any]
     start_time: float = 0.0
     end_time: float = 0.0
     result: Any = None
-    error: Exception | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    error: Optional[Exception] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def execution_time(self) -> float:
@@ -132,9 +133,9 @@ class Dispatcher(ABC):
     @abstractmethod
     def dispatch(
         self,
-        subscribers: list[Callable[..., Any]],
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        subscribers: List[Callable[..., Any]],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ) -> None: ...
 
 
@@ -143,9 +144,9 @@ class BroadcastDispatcher(Dispatcher):
 
     def dispatch(
         self,
-        subscribers: list[Callable[..., Any]],
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        subscribers: List[Callable[..., Any]],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ) -> None:
         for fn in subscribers:
             try:
@@ -167,9 +168,9 @@ class RoundRobinDispatcher(Dispatcher):
 
     def dispatch(
         self,
-        subscribers: list[Callable[..., Any]],
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        subscribers: List[Callable[..., Any]],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ) -> None:
         if not subscribers:
             return
@@ -193,9 +194,9 @@ class ConcurrentDispatcher(Dispatcher):
 
     def dispatch(
         self,
-        subscribers: list[Callable[..., Any]],
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        subscribers: List[Callable[..., Any]],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ) -> None:
         for fn in subscribers:
             try:
@@ -213,9 +214,9 @@ class LeastLoadedDispatcher(Dispatcher):
 
     def dispatch(
         self,
-        subscribers: list[Callable[..., Any]],
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        subscribers: List[Callable[..., Any]],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ) -> None:
         if not subscribers:
             return
@@ -250,12 +251,12 @@ class Eventful:
 
     def __init__(
         self,
-        dispatcher: Dispatcher | None = None,
+        dispatcher: Optional[Dispatcher] = None,
         *,
-        owner: Observable | None = None,
-        name: str | None = None,
+        owner: Optional[Observable] = None,
+        name: Optional[str] = None,
     ) -> None:
-        self._subscribers: list[Callable[..., Any]] = []
+        self._subscribers: List[Callable[..., Any]] = []
         self._dispatcher = dispatcher or BroadcastDispatcher()
         self._lock = threading.Lock()
         # When owner+name are set, fire() also walks owner's MRO for
@@ -309,7 +310,7 @@ class Eventful:
                         )
 
     @property
-    def subscribers(self) -> list[Callable[..., Any]]:
+    def subscribers(self) -> List[Callable[..., Any]]:
         with self._lock:
             return list(self._subscribers)
 
@@ -343,7 +344,7 @@ class Observable:
     delegates to it. ``AttributeError`` raised if no such Eventful exists.
     """
 
-    def on(self, event: str, /, fn: Callable[..., Any]) -> Callable[..., Any] | str:
+    def on(self, event: str, /, fn: Callable[..., Any]) -> Union[Callable[..., Any], str]:
         """Subscribe ``fn`` to the ``event`` channel.
 
         Returns the registered callable. Subclasses (e.g.
@@ -360,7 +361,7 @@ class Observable:
 
     subscribe = on  # alias
 
-    def fire(self, event: str, /, *args: Any, **kwargs: Any) -> str | None:
+    def fire(self, event: str, /, *args: Any, **kwargs: Any) -> Optional[str]:
         """Fire the ``event`` channel with ``*args``/``**kwargs``.
 
         Returns ``None`` for the in-process channel form. Subclasses that
@@ -377,7 +378,7 @@ class Observable:
         target.fire(*args, **kwargs)
         return None
 
-    def events(self) -> list[str]:
+    def events(self) -> List[str]:
         """List of Eventful attribute names on this instance."""
         return [
             name
@@ -407,7 +408,7 @@ class Node:
     name: str
     cpus: int
     memory_gb: float
-    gpus: list[int]
+    gpus: List[int]
     handler: Callable[..., Any]
     _in_flight: int = field(default=0, init=False, repr=False)
     _lock: threading.Lock = field(
@@ -468,7 +469,7 @@ def _reduce_count(m: Meter) -> float:
 # callable, so only these validated reducers can run. Child meters pass a
 # sensible default (TimingMeter "mean", MemoryMeter "max", ...) that the caller
 # may still override via ``reduction=``.
-REDUCTIONS: dict[str, Callable[[Meter], float]] = {
+REDUCTIONS: Dict[str, Callable[[Meter], float]] = {
     "mean": _reduce_mean,
     "sum": _reduce_sum,
     "max": _reduce_max,
@@ -503,10 +504,10 @@ class Meter(Observable):
 
     def __init__(
         self,
-        name: str | None = None,
+        name: Optional[str] = None,
         *,
         reduction: str = "mean",
-        dispatcher: Dispatcher | None = None,
+        dispatcher: Optional[Dispatcher] = None,
     ) -> None:
         if reduction not in REDUCTIONS:
             raise ValueError(
@@ -564,7 +565,7 @@ class Meter(Observable):
         return REDUCTIONS[self._reduction](self)
 
     @property
-    def stats(self) -> dict[str, float]:
+    def stats(self) -> Dict[str, float]:
         return {"value": self.value, "count": float(self.count)}
 
     def __repr__(self) -> str:
@@ -575,7 +576,7 @@ class Meter(Observable):
 
     # ---- lifecycle convention ------------------------------------------
 
-    def measure(self, ctx: Context) -> float | None:
+    def measure(self, ctx: Context) -> Optional[float]:
         """Compute one observation per task call. Default no-op."""
         return None
 
@@ -615,13 +616,13 @@ class Meter(Observable):
         return self
 
 
-_METER_EVENT_NAMES: weakref.WeakKeyDictionary[type, tuple[str, ...]] = (
+_METER_EVENT_NAMES: weakref.WeakKeyDictionary[type, Tuple[str, ...]] = (
     weakref.WeakKeyDictionary()
 )
 _METER_EVENT_NAMES_LOCK = threading.Lock()
 
 
-def _meter_event_names(meter_cls: type) -> tuple[str, ...]:
+def _meter_event_names(meter_cls: type) -> Tuple[str, ...]:
     """Cached scan of ``on_X`` callables on a Meter subclass.
 
     ``dir()`` + ``startswith`` cost ~43 string ops per attach for a typical
@@ -698,7 +699,7 @@ class Reporter(Observable):
 # of that class fires the corresponding event. Consulted directly by
 # :meth:`Eventful.fire` when the eventful was constructed with
 # ``owner`` + ``name``.
-_CLASS_SUBSCRIBERS: dict[type, dict[str, list[Callable[..., Any]]]] = {}
+_CLASS_SUBSCRIBERS: Dict[type, Dict[str, List[Callable[..., Any]]]] = {}
 
 
 def _register_class_subscriber(
@@ -786,7 +787,7 @@ class TimingMeter(Meter):
 
     def __init__(
         self,
-        threshold: float | None = None,
+        threshold: Optional[float] = None,
         name: str = "timing",
         *,
         reduction: str = "mean",
@@ -850,14 +851,14 @@ class MetricsMeter(Meter):
     def __init__(
         self,
         name: str,
-        extract: Callable[[Context], float | None],
+        extract: Callable[[Context], Optional[float]],
         *,
         reduction: str = "mean",
     ) -> None:
         super().__init__(name=name, reduction=reduction)
         self._extract = extract
 
-    def measure(self, ctx: Context) -> float | None:
+    def measure(self, ctx: Context) -> Optional[float]:
         try:
             return self._extract(ctx)
         except Exception:

@@ -18,6 +18,7 @@ just have the peer publish to you.
 """
 
 from __future__ import annotations
+from typing import Dict, List, Optional
 
 import threading
 from typing import Any
@@ -50,11 +51,11 @@ class RemoteQueue:
         rq.broadcast("shutdown", {})         # push to all peers
     """
 
-    def __init__(self, node_id: str, *, local: MessageQueue | None = None) -> None:
+    def __init__(self, node_id: str, *, local: Optional[MessageQueue] = None) -> None:
         self._node_id = node_id
         self._local = local
-        self._peers: dict[str, MessageQueue] = {}
-        self._transports: dict[str, TCPClientTransport] = {}
+        self._peers: Dict[str, MessageQueue] = {}
+        self._transports: Dict[str, TCPClientTransport] = {}
         self._lock = threading.RLock()
 
     @property
@@ -62,11 +63,11 @@ class RemoteQueue:
         return self._node_id
 
     @property
-    def local(self) -> MessageQueue | None:
+    def local(self) -> Optional[MessageQueue]:
         return self._local
 
     @property
-    def peers(self) -> list[str]:
+    def peers(self) -> List[str]:
         """Currently connected peer node ids."""
         with self._lock:
             return list(self._peers)
@@ -104,7 +105,7 @@ class RemoteQueue:
             raise KeyError(f"not connected to node {node_id!r}")
         return peer.publish(topic, payload, **headers)
 
-    def broadcast(self, topic: str, payload: Any, **headers: Any) -> dict[str, str]:
+    def broadcast(self, topic: str, payload: Any, **headers: Any) -> Dict[str, str]:
         """Push a message to every connected peer. Returns ``{node_id: msg_id}``."""
         with self._lock:
             peers = dict(self._peers)

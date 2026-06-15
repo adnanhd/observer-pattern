@@ -6,6 +6,7 @@ third-party dependencies. Import them explicitly when needed:
     from eventforge.transports.redis import RedisTransport  # eventforge[redis]
     from eventforge.transports.nats import NatsTransport  # eventforge[nats]
 """
+from __future__ import annotations
 
 from eventforge.transports.base import Transport
 from eventforge.transports.memory import MemoryTransport

@@ -1,4 +1,6 @@
 """In-memory transport for single-process messaging."""
+from __future__ import annotations
+from typing import Dict, List, Optional
 
 import asyncio
 import fnmatch
@@ -16,16 +18,16 @@ class MemoryTransport(Transport):
     """Thread-safe in-memory message transport."""
 
     def __init__(self, max_queue_size: int = 1000):
-        self._queues: dict[str, Queue[Message]] = defaultdict(
+        self._queues: Dict[str, Queue[Message]] = defaultdict(
             lambda: Queue(maxsize=max_queue_size)
         )
-        self._subscribers: dict[str, Callable[[Message], None]] = {}
-        self._topic_subs: dict[str, list[str]] = defaultdict(list)
+        self._subscribers: Dict[str, Callable[[Message], None]] = {}
+        self._topic_subs: Dict[str, List[str]] = defaultdict(list)
         # Reverse index: sub_id -> topic pattern. Built at subscribe time so
         # send() can route in O(N_subscribers) rather than scanning every
         # (sub, topic) pair (the previous O(N_subs * N_topics) walk was the
         # dominant cost in MessageQueue.publish per the profiler).
-        self._sub_topic: dict[str, str] = {}
+        self._sub_topic: Dict[str, str] = {}
         self._lock = threading.RLock()
         self._closed = False
 
@@ -53,7 +55,7 @@ class MemoryTransport(Transport):
                     except Exception:
                         pass  # Don't let callback errors break send
 
-    def receive(self, topic: str, timeout: float | None = None) -> Message | None:
+    def receive(self, topic: str, timeout: Optional[float] = None) -> Optional[Message]:
         """Receive next message from topic (blocking)."""
         if self._closed:
             return None
@@ -64,8 +66,8 @@ class MemoryTransport(Transport):
             return None
 
     async def receive_async(
-        self, topic: str, timeout: float | None = None
-    ) -> Message | None:
+        self, topic: str, timeout: Optional[float] = None
+    ) -> Optional[Message]:
         """Receive next message from topic (async)."""
         if self._closed:
             return None

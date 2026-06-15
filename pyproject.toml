@@ -9,7 +9,7 @@ description = "Observer + pub-sub + RPC + work-queue primitives, one package."
 authors = [{ name = "Adnan Harun Dogan", email = "adnanharundogan@gmail.com" }]
 license = { file = "LICENSE" }
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 keywords = [
     "observer-pattern",
     "pubsub",
@@ -25,6 +25,8 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
