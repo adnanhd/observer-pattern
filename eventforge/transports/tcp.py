@@ -12,7 +12,6 @@ RPCServer/RPCClient unchanged.
 """
 
 from __future__ import annotations
-from typing import Dict, List, Optional
 
 import asyncio
 import fnmatch
@@ -24,6 +23,7 @@ import threading
 from collections import defaultdict
 from collections.abc import Callable
 from queue import Empty, Queue
+from typing import Dict, List, Optional
 from uuid import uuid4
 
 from eventforge.transports.base import Transport

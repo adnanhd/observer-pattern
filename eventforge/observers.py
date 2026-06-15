@@ -48,7 +48,6 @@ Lifecycle event names (extensible; just call ``self.fire("name", ...)``):
 """
 
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple, Union
 
 import logging
 import resource
@@ -59,7 +58,17 @@ import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Tuple,
+    Union,
+    cast,
+)
 
 from eventforge.types import TaskContext
 
@@ -113,7 +122,7 @@ class ExecutionContext:
         return self.error is None
 
 
-Context = ExecutionContext | TaskContext
+Context = Union[ExecutionContext, TaskContext]
 
 
 # =============================================================================
@@ -344,7 +353,9 @@ class Observable:
     delegates to it. ``AttributeError`` raised if no such Eventful exists.
     """
 
-    def on(self, event: str, /, fn: Callable[..., Any]) -> Union[Callable[..., Any], str]:
+    def on(
+        self, event: str, /, fn: Callable[..., Any]
+    ) -> Union[Callable[..., Any], str]:
         """Subscribe ``fn`` to the ``event`` channel.
 
         Returns the registered callable. Subclasses (e.g.

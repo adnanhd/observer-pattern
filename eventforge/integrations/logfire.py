@@ -31,11 +31,10 @@ other built-in meters (TimingMeter, MemoryMeter, ...).
 """
 
 from __future__ import annotations
-from typing import Dict, List, Optional, Union
 
 import threading
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Dict, List, Optional, Union
 
 try:
     import logfire as _logfire  # type: ignore[import-not-found]

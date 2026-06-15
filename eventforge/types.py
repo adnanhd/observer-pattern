@@ -1,13 +1,13 @@
 """Core types for eventforge message queue and execution."""
+
 from __future__ import annotations
-from typing import Dict, Tuple
 
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
@@ -234,7 +234,7 @@ class TaskContext:
     # Execution info
     args: Tuple[Any, ...] = ()
     kwargs: Dict[str, Any] = field(default_factory=dict)
-    executor: Optional['Executor'] = None
+    executor: Optional["Executor"] = None
 
     # Timing
     start_time: float = 0.0

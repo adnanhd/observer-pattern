@@ -18,10 +18,9 @@ just have the peer publish to you.
 """
 
 from __future__ import annotations
-from typing import Dict, List, Optional
 
 import threading
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from eventforge.queue import Handler, MessageQueue
 from eventforge.transports.tcp import TCPClientTransport

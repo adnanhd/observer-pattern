@@ -1,13 +1,13 @@
 """Task decorator + TaskRunner -- callable that is also an Observable."""
+
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple
 
 import functools
 import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import Any, Protocol, cast
+from typing import Any, Dict, List, Optional, Protocol, Tuple, cast
 from uuid import uuid4
 
 from eventforge.executor import ExecutionMode, Executor
@@ -29,12 +29,12 @@ class TaskCallable(Protocol):
     ``my_task.pool.stats``.
     """
 
-    _runner: 'TaskRunner'
+    _runner: "TaskRunner"
     _task: bool
     _topic: str
     _executor: Executor
     state: SharedState
-    pool: 'TaskPool | None'
+    pool: "Optional[TaskPool]"
     start: Eventful
     success: Eventful
     failure: Eventful
@@ -135,7 +135,7 @@ class TaskPool:
     class _AcquireContext:
         """Context manager for pool slot acquisition."""
 
-        def __init__(self, pool: 'TaskPool', blocking: bool, timeout: Optional[float]):
+        def __init__(self, pool: "TaskPool", blocking: bool, timeout: Optional[float]):
             self.pool = pool
             self.blocking = blocking
             self.timeout = timeout

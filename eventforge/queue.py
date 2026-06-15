@@ -15,11 +15,10 @@ Three equivalent ways to subscribe::
 """
 
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple, Union
 
 import threading
 from collections.abc import Callable
-from typing import Any, overload
+from typing import Any, Dict, List, Optional, Tuple, Union, overload
 from uuid import uuid4
 
 from eventforge.observers import BroadcastDispatcher, Dispatcher, Eventful, Observable

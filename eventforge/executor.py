@@ -1,6 +1,6 @@
 """Unified executor with sequential, thread, and process modes."""
+
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple, Union
 
 import asyncio
 import logging
@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
 from eventforge.types import TaskResult, TaskStatus
@@ -296,7 +296,7 @@ class Executor:
             self._results[task_id] = result
             self._futures.pop(task_id, None)
 
-    def __enter__(self) -> 'Executor':
+    def __enter__(self) -> "Executor":
         self.start()
         return self
 

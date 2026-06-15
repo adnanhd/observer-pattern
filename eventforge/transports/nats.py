@@ -25,7 +25,6 @@ callback fires.
 """
 
 from __future__ import annotations
-from typing import Dict, List, Optional, Union
 
 import asyncio
 import re
@@ -35,7 +34,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from queue import Empty, Queue
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from eventforge.transports.base import Transport

@@ -33,13 +33,13 @@ never a public interface.
 """
 
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple
 
 import argparse
 import importlib
 import logging
 import signal
 from collections.abc import Callable
+from typing import Dict, List, Optional, Tuple
 
 from eventforge import MessageQueue, RPCServer
 from eventforge.transports.tcp import TCPServerTransport

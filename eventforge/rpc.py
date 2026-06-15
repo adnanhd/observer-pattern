@@ -1,12 +1,12 @@
 """Remote Procedure Call over message queue."""
+
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple, Type
 
 import asyncio
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple, Type
 from uuid import uuid4
 
 from eventforge.executor import Executor
@@ -143,7 +143,7 @@ class RPCServer:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, lambda: self._handle_request(msg))
 
-    def __enter__(self) -> 'RPCServer':
+    def __enter__(self) -> "RPCServer":
         return self
 
     def __exit__(self, *args: Any) -> None:
@@ -257,14 +257,14 @@ class RoundRobinRPCClient:
         result = lb.call("train_step", envelope)
     """
 
-    def __init__(self, clients: List['RPCClient']):
+    def __init__(self, clients: List["RPCClient"]):
         if not clients:
             raise ValueError("RoundRobinRPCClient requires at least one RPCClient")
         self._clients: List[RPCClient] = list(clients)
         self._idx = 0
         self._lock = threading.Lock()
 
-    def _next_client(self) -> 'RPCClient':
+    def _next_client(self) -> "RPCClient":
         with self._lock:
             client = self._clients[self._idx]
             self._idx = (self._idx + 1) % len(self._clients)
@@ -287,13 +287,13 @@ class RoundRobinRPCClient:
 
 
 def with_retry(
-    client: 'RPCClient',
+    client: "RPCClient",
     *,
     max_retries: int = 3,
     backoff_initial: float = 0.1,
     backoff_factor: float = 2.0,
     retry_on: Tuple[Type[BaseException], ...] = (TimeoutError, ConnectionError),
-) -> 'RPCClient':
+) -> "RPCClient":
     """Wrap ``client`` so each ``call()`` retries up to ``max_retries`` times.
 
     Exponential backoff: ``backoff_initial`` seconds before retry 1,

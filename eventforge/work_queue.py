@@ -1,6 +1,6 @@
 """Work queue with competing consumers, ack/nack, and dead-letter support."""
+
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple
 
 import threading
 import time
@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from eventforge.queue import MessageQueue
@@ -74,7 +74,9 @@ class WorkQueue(MessageQueue):
         self._wq_lock = threading.RLock()
         self._pending: Dict[str, deque[Message]] = defaultdict(deque)
         self._in_flight: Dict[str, InFlightEntry] = {}
-        self._consumer_groups: Dict[Tuple[str, str], List[Callable[[Message], None]]] = defaultdict(list)
+        self._consumer_groups: Dict[
+            Tuple[str, str], List[Callable[[Message], None]]
+        ] = defaultdict(list)
         self._rr_index: Dict[Tuple[str, str], int] = defaultdict(int)
         self._consumer_registry: Dict[str, Tuple[str, str]] = {}
         self._pending_condition = threading.Condition(self._wq_lock)

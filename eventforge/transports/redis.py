@@ -23,14 +23,13 @@ subscriber callback fires, so the segment semantics of eventforge ``*`` vs
 """
 
 from __future__ import annotations
-from typing import Dict, List, Optional
 
 import re
 import threading
 from collections import defaultdict
 from collections.abc import Callable
 from queue import Empty, Queue
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from eventforge.transports.base import Transport

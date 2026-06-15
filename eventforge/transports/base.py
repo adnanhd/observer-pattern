@@ -1,9 +1,10 @@
 """Abstract transport interface."""
+
 from __future__ import annotations
-from typing import Optional
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from typing import Optional
 
 from eventforge.types import Message
 

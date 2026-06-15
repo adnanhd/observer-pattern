@@ -96,10 +96,16 @@ disable_error_code = ["no-untyped-call"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py310"
+target-version = "py38"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+# The package supports Python 3.8 and uses pydantic, which evaluates
+# annotations at runtime. pyupgrade's annotation rewrites assume
+# ``from __future__ import annotations`` makes the modern ``list[...]`` /
+# ``X | None`` forms safe, but pydantic resolves the stringified
+# annotations on import and those forms raise on 3.8. Keep the typing.* forms.
+ignore = ["UP006", "UP007", "UP035", "UP037", "UP045"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
