@@ -721,8 +721,8 @@ def _register_class_subscriber(
 
 # Each entry: (attr_name, ((target_cls, event), ...)) -- the @observe targets
 # placed on the Reporter method.
-ObserveTargets = tuple[tuple[type, str], ...]
-ReporterMethods = tuple[tuple[str, ObserveTargets], ...]
+ObserveTargets = Tuple[Tuple[type, str], ...]
+ReporterMethods = Tuple[Tuple[str, ObserveTargets], ...]
 
 _REPORTER_OBSERVE_METHODS: weakref.WeakKeyDictionary[type, ReporterMethods] = (
     weakref.WeakKeyDictionary()
