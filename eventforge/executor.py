@@ -1,5 +1,7 @@
 """Unified executor with sequential, thread, and process modes."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
@@ -9,7 +11,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
 from eventforge.types import TaskResult, TaskStatus
@@ -28,9 +30,9 @@ class ExecutionMode(str, Enum):
 def _run_with_timing(
     task_id: str,
     func: Callable[..., Any],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-) -> dict[str, Any]:
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
     """Worker entry: time the call and return a structured result.
 
     Submitted directly to ProcessPoolExecutor, which pickles ``func`` /
@@ -71,10 +73,10 @@ class Executor:
     ):
         self._mode = mode
         self._max_workers = max_workers
-        self._results: dict[str, TaskResult] = {}
-        self._futures: dict[str, Future[TaskResult | dict[str, Any]]] = {}
+        self._results: Dict[str, TaskResult] = {}
+        self._futures: Dict[str, Future[Union[TaskResult, Dict[str, Any]]]] = {}
         self._lock = threading.RLock()
-        self._pool: ThreadPoolExecutor | ProcessPoolExecutor | None = None
+        self._pool: Optional[Union[ThreadPoolExecutor, ProcessPoolExecutor]] = None
         self._running = False
 
     @property
@@ -113,7 +115,7 @@ class Executor:
         func: Callable[..., Any],
         *args: Any,
         priority: int = 0,
-        timeout: float | None = None,
+        timeout: Optional[float] = None,
         **kwargs: Any,
     ) -> str:
         """Submit task for execution. Returns task_id."""
@@ -128,7 +130,7 @@ class Executor:
                 self.start()
 
             assert self._pool is not None  # set by start() for non-sequential modes
-            future: Future[TaskResult | dict[str, Any]]
+            future: Future[Union[TaskResult, Dict[str, Any]]]
             if self._mode == ExecutionMode.THREAD:
                 future = self._pool.submit(
                     self._execute_sync, task_id, func, args, kwargs
@@ -144,7 +146,7 @@ class Executor:
                 self._futures[task_id] = future
 
             def _done(
-                f: Future[TaskResult | dict[str, Any]], tid: str = task_id
+                f: Future[Union[TaskResult, Dict[str, Any]]], tid: str = task_id
             ) -> None:
                 self._on_complete(tid, f)
 
@@ -163,7 +165,7 @@ class Executor:
 
         return await loop.run_in_executor(None, _submit)
 
-    def result(self, task_id: str, timeout: float | None = None) -> TaskResult:
+    def result(self, task_id: str, timeout: Optional[float] = None) -> TaskResult:
         """Get task result (blocking)."""
         deadline = time.time() + timeout if timeout else None
 
@@ -210,7 +212,7 @@ class Executor:
             time.sleep(0.01)
 
     async def result_async(
-        self, task_id: str, timeout: float | None = None
+        self, task_id: str, timeout: Optional[float] = None
     ) -> TaskResult:
         """Get task result asynchronously."""
         loop = asyncio.get_event_loop()
@@ -220,8 +222,8 @@ class Executor:
         self,
         func: Callable[..., Any],
         items: Iterable[Any],
-        timeout: float | None = None,
-    ) -> list[TaskResult]:
+        timeout: Optional[float] = None,
+    ) -> List[TaskResult]:
         """Map function over items."""
         task_ids = [self.submit(func, item) for item in items]
         return [self.result(tid, timeout) for tid in task_ids]
@@ -230,8 +232,8 @@ class Executor:
         self,
         func: Callable[..., Any],
         items: Iterable[Any],
-        timeout: float | None = None,
-    ) -> list[TaskResult]:
+        timeout: Optional[float] = None,
+    ) -> List[TaskResult]:
         """Map function over items asynchronously."""
         task_ids = [await self.submit_async(func, item) for item in items]
         return [await self.result_async(tid, timeout) for tid in task_ids]
@@ -240,8 +242,8 @@ class Executor:
         self,
         task_id: str,
         func: Callable[..., Any],
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ) -> TaskResult:
         """Execute task synchronously."""
         start = time.time()
@@ -267,7 +269,7 @@ class Executor:
             )
 
     def _on_complete(
-        self, task_id: str, future: Future[TaskResult | dict[str, Any]]
+        self, task_id: str, future: Future[Union[TaskResult, Dict[str, Any]]]
     ) -> None:
         """Handle task completion."""
         try:

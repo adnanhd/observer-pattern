@@ -7,6 +7,8 @@ third-party dependencies. Import them explicitly when needed:
     from eventforge.transports.nats import NatsTransport  # eventforge[nats]
 """
 
+from __future__ import annotations
+
 from eventforge.transports.base import Transport
 from eventforge.transports.memory import MemoryTransport
 from eventforge.transports.tcp import TCPClientTransport, TCPServerTransport

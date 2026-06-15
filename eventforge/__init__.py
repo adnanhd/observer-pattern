@@ -7,6 +7,8 @@ emit events; Reporters subscribe to Meter emissions and ship them
 externally (logging, syslog, OpenTelemetry, ...).
 """
 
+from __future__ import annotations
+
 from eventforge.executor import ExecutionMode, Executor
 from eventforge.observers import (
     BroadcastDispatcher,

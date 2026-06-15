@@ -29,7 +29,7 @@ import threading
 from collections import defaultdict
 from collections.abc import Callable
 from queue import Empty, Queue
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from eventforge.transports.base import Transport
@@ -56,7 +56,7 @@ def _matches(topic: str, pattern: str) -> bool:
     """
     if pattern == topic:
         return True
-    parts: list[str] = []
+    parts: List[str] = []
     i = 0
     while i < len(pattern):
         if pattern[i : i + 2] == "**":
@@ -85,7 +85,7 @@ class RedisTransport(Transport):
         port: int = 6379,
         *,
         db: int = 0,
-        client: Any | None = None,
+        client: Optional[Any] = None,
         **redis_kwargs: Any,
     ) -> None:
         if client is not None:
@@ -101,14 +101,14 @@ class RedisTransport(Transport):
             self._client = redis.Redis(host=host, port=port, db=db, **redis_kwargs)
 
         self._pubsub: redis_mod.client.PubSub = self._client.pubsub()
-        self._subscribers: dict[str, Callable[[Message], None]] = {}
-        self._sub_topic: dict[str, str] = {}
-        self._sub_pattern: dict[str, str] = {}
+        self._subscribers: Dict[str, Callable[[Message], None]] = {}
+        self._sub_topic: Dict[str, str] = {}
+        self._sub_pattern: Dict[str, str] = {}
         # Redis glob pattern -> refcount, so we only PUNSUBSCRIBE when the last
         # subscription/receive-queue using a pattern goes away.
-        self._pattern_refs: dict[str, int] = defaultdict(int)
-        self._queues: dict[str, Queue[Message]] = defaultdict(Queue)
-        self._queue_patterns: dict[str, str] = {}
+        self._pattern_refs: Dict[str, int] = defaultdict(int)
+        self._queues: Dict[str, Queue[Message]] = defaultdict(Queue)
+        self._queue_patterns: Dict[str, str] = {}
         self._lock = threading.RLock()
         self._running = True
         self._listener = threading.Thread(target=self._listen, daemon=True)
@@ -185,7 +185,7 @@ class RedisTransport(Transport):
             raise RuntimeError("Transport is closed")
         self._client.publish(message.topic, message.model_dump_json())
 
-    def receive(self, topic: str, timeout: float | None = None) -> Message | None:
+    def receive(self, topic: str, timeout: Optional[float] = None) -> Optional[Message]:
         if not self._running:
             return None
         self._ensure_queue_subscription(topic)
@@ -195,8 +195,8 @@ class RedisTransport(Transport):
             return None
 
     async def receive_async(
-        self, topic: str, timeout: float | None = None
-    ) -> Message | None:
+        self, topic: str, timeout: Optional[float] = None
+    ) -> Optional[Message]:
         import asyncio
 
         if not self._running:

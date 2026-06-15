@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from typing import Any, overload
+from typing import Any, Dict, List, Optional, Tuple, Union, overload
 from uuid import uuid4
 
 from eventforge.observers import BroadcastDispatcher, Dispatcher, Eventful, Observable
@@ -36,14 +36,14 @@ __all__ = ["MessageQueue", "Handler", "AsyncHandler"]
 class MessageQueue(Observable):
     """Topic-keyed pub-sub backed by a Transport."""
 
-    def __init__(self, transport: Transport | None = None) -> None:
+    def __init__(self, transport: Optional[Transport] = None) -> None:
         self._transport = transport or MemoryTransport()
-        self._topics: dict[str, Eventful] = {}
+        self._topics: Dict[str, Eventful] = {}
         # handler_id -> (topic, fn), so unsubscribe can find + remove the
         # actual subscriber from the topic's Eventful.
-        self._sub_ids: dict[str, tuple[str, Handler]] = {}
+        self._sub_ids: Dict[str, Tuple[str, Handler]] = {}
         # topic -> transport subscription id (one transport sub per topic).
-        self._transport_subs: dict[str, str] = {}
+        self._transport_subs: Dict[str, str] = {}
         self._lock = threading.RLock()
 
     # ---- topic management ----------------------------------------------
@@ -51,7 +51,7 @@ class MessageQueue(Observable):
     def topic(
         self,
         name: str,
-        dispatcher: Dispatcher | None = None,
+        dispatcher: Optional[Dispatcher] = None,
     ) -> Eventful:
         """Get-or-create the :class:`Eventful` channel for topic ``name``.
 
@@ -82,8 +82,8 @@ class MessageQueue(Observable):
     ) -> Callable[[Handler], Handler]: ...
 
     def on(
-        self, event_or_topic: str, fn: Handler | None = None
-    ) -> Callable[[Handler], Handler] | str:
+        self, event_or_topic: str, fn: Optional[Handler] = None
+    ) -> Union[Callable[[Handler], Handler], str]:
         """Subscribe ``fn`` to ``event_or_topic``. Two forms:
 
         - ``queue.on("topic", handler)`` -- subscribe directly,
@@ -145,15 +145,15 @@ class MessageQueue(Observable):
                 return False
             return channel.unsubscribe(fn)
 
-    def receive(self, topic: str, timeout: float | None = None) -> Message | None:
+    def receive(self, topic: str, timeout: Optional[float] = None) -> Optional[Message]:
         """Receive next message from topic (blocking)."""
         return self._transport.receive(topic, timeout)
 
     async def receive_async(
         self,
         topic: str,
-        timeout: float | None = None,
-    ) -> Message | None:
+        timeout: Optional[float] = None,
+    ) -> Optional[Message]:
         """Receive next message from topic (async)."""
         return await self._transport.receive_async(topic, timeout)
 
@@ -165,7 +165,7 @@ class MessageQueue(Observable):
         payload: Any,
         timeout: float = 30.0,
         **headers: Any,
-    ) -> Message | None:
+    ) -> Optional[Message]:
         """Send a request and wait for a reply on a unique reply topic."""
         reply_topic = f"_reply.{uuid4()}"
         correlation_id = str(uuid4())
@@ -185,7 +185,7 @@ class MessageQueue(Observable):
         payload: Any,
         timeout: float = 30.0,
         **headers: Any,
-    ) -> Message | None:
+    ) -> Optional[Message]:
         reply_topic = f"_reply.{uuid4()}"
         correlation_id = str(uuid4())
         message = Message(
@@ -244,7 +244,7 @@ class MessageQueue(Observable):
 
     # ---- introspection -------------------------------------------------
 
-    def topics(self) -> list[str]:
+    def topics(self) -> List[str]:
         """Names of all topics currently tracked."""
         with self._lock:
             return list(self._topics)

@@ -9,7 +9,7 @@ description = "Observer + pub-sub + RPC + work-queue primitives, one package."
 authors = [{ name = "Adnan Harun Dogan", email = "adnanharundogan@gmail.com" }]
 license = { file = "LICENSE" }
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 keywords = [
     "observer-pattern",
     "pubsub",
@@ -25,6 +25,8 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -94,10 +96,16 @@ disable_error_code = ["no-untyped-call"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py310"
+target-version = "py38"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+# The package supports Python 3.8 and uses pydantic, which evaluates
+# annotations at runtime. pyupgrade's annotation rewrites assume
+# ``from __future__ import annotations`` makes the modern ``list[...]`` /
+# ``X | None`` forms safe, but pydantic resolves the stringified
+# annotations on import and those forms raise on 3.8. Keep the typing.* forms.
+ignore = ["UP006", "UP007", "UP035", "UP037", "UP045"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

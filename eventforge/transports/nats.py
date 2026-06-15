@@ -34,7 +34,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from queue import Empty, Queue
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from eventforge.transports.base import Transport
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 def _to_nats_subject(topic: str) -> str:
     """Map an eventforge topic to a NATS subject (``**`` -> ``>``, ``*`` -> ``*``)."""
     tokens = topic.split(".")
-    out: list[str] = []
+    out: List[str] = []
     for tok in tokens:
         if tok == "**":
             out.append(">")
@@ -66,7 +66,7 @@ def _matches(topic: str, pattern: str) -> bool:
     """
     if pattern == topic:
         return True
-    parts: list[str] = []
+    parts: List[str] = []
     i = 0
     while i < len(pattern):
         if pattern[i : i + 2] == "**":
@@ -86,7 +86,7 @@ class NatsTransport(Transport):
 
     def __init__(
         self,
-        servers: str | list[str] = "nats://localhost:4222",
+        servers: Union[str, List[str]] = "nats://localhost:4222",
         *,
         connect_timeout: float = 2.0,
         **kwargs: Any,
@@ -102,12 +102,12 @@ class NatsTransport(Transport):
         self._servers = servers
         self._connect_timeout = connect_timeout
         self._connect_kwargs = kwargs
-        self._nc: NatsClient | None = None
-        self._subscribers: dict[str, Callable[[Message], None]] = {}
-        self._sub_topic: dict[str, str] = {}
-        self._nats_subs: dict[str, NatsSubscription] = {}
-        self._queues: dict[str, Queue[Message]] = defaultdict(Queue)
-        self._queue_subs: dict[str, NatsSubscription] = {}
+        self._nc: Optional[NatsClient] = None
+        self._subscribers: Dict[str, Callable[[Message], None]] = {}
+        self._sub_topic: Dict[str, str] = {}
+        self._nats_subs: Dict[str, NatsSubscription] = {}
+        self._queues: Dict[str, Queue[Message]] = defaultdict(Queue)
+        self._queue_subs: Dict[str, NatsSubscription] = {}
         self._lock = threading.RLock()
         self._callback_pool = ThreadPoolExecutor(max_workers=4)
         self._running = True
@@ -134,7 +134,7 @@ class NatsTransport(Transport):
         self._loop.call_soon(self._ready.set)
         self._loop.run_forever()
 
-    def _run(self, coro: Any, timeout: float | None = None) -> Any:
+    def _run(self, coro: Any, timeout: Optional[float] = None) -> Any:
         """Run a coroutine on the private loop from a sync caller and wait."""
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         try:
@@ -146,7 +146,7 @@ class NatsTransport(Transport):
     async def _connect(self) -> None:
         # allow_reconnect=False + a short connect_timeout so an unreachable
         # server raises promptly rather than retrying with backoff.
-        kwargs: dict[str, Any] = {
+        kwargs: Dict[str, Any] = {
             "connect_timeout": self._connect_timeout,
             "allow_reconnect": False,
             "max_reconnect_attempts": 0,
@@ -194,7 +194,7 @@ class NatsTransport(Transport):
 
         self._run(_pub())
 
-    def receive(self, topic: str, timeout: float | None = None) -> Message | None:
+    def receive(self, topic: str, timeout: Optional[float] = None) -> Optional[Message]:
         if not self._running:
             return None
         self._ensure_queue_subscription(topic)
@@ -204,8 +204,8 @@ class NatsTransport(Transport):
             return None
 
     async def receive_async(
-        self, topic: str, timeout: float | None = None
-    ) -> Message | None:
+        self, topic: str, timeout: Optional[float] = None
+    ) -> Optional[Message]:
         if not self._running:
             return None
         self._ensure_queue_subscription(topic)

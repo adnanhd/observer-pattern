@@ -1,11 +1,13 @@
 """Task decorator + TaskRunner -- callable that is also an Observable."""
 
+from __future__ import annotations
+
 import functools
 import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import Any, Protocol, cast
+from typing import Any, Dict, List, Optional, Protocol, Tuple, cast
 from uuid import uuid4
 
 from eventforge.executor import ExecutionMode, Executor
@@ -32,7 +34,7 @@ class TaskCallable(Protocol):
     _topic: str
     _executor: Executor
     state: SharedState
-    pool: "TaskPool | None"
+    pool: "Optional[TaskPool]"
     start: Eventful
     success: Eventful
     failure: Eventful
@@ -71,7 +73,7 @@ class TaskPool:
         self._queued = 0
         self._lock = threading.Lock()
 
-    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+    def acquire(self, blocking: bool = True, timeout: Optional[float] = None) -> bool:
         """Acquire a slot in the pool.
 
         Args:
@@ -119,7 +121,7 @@ class TaskPool:
             return self.max_instances - self._active
 
     @property
-    def stats(self) -> dict[str, int]:
+    def stats(self) -> Dict[str, int]:
         """Get pool statistics."""
         with self._lock:
             return {
@@ -133,7 +135,7 @@ class TaskPool:
     class _AcquireContext:
         """Context manager for pool slot acquisition."""
 
-        def __init__(self, pool: "TaskPool", blocking: bool, timeout: float | None):
+        def __init__(self, pool: "TaskPool", blocking: bool, timeout: Optional[float]):
             self.pool = pool
             self.blocking = blocking
             self.timeout = timeout
@@ -148,7 +150,7 @@ class TaskPool:
                 self.pool.release()
 
     def slot(
-        self, blocking: bool = True, timeout: float | None = None
+        self, blocking: bool = True, timeout: Optional[float] = None
     ) -> _AcquireContext:
         """Context manager for acquiring a pool slot.
 
@@ -197,16 +199,16 @@ class TaskRunner(Observable):
         self,
         func: Callable[..., Any],
         topic: str,
-        executor: Executor | None = None,
-        queue: Any | None = None,  # MessageQueue, avoid circular import
-        on_execute: list[Any] | None = None,
-        on_start: ContextHandler | None = None,
-        on_success: ContextHandler | None = None,
-        on_failure: ContextHandler | None = None,
-        on_complete: ContextHandler | None = None,
+        executor: Optional[Executor] = None,
+        queue: Optional[Any] = None,  # MessageQueue, avoid circular import
+        on_execute: Optional[List[Any]] = None,
+        on_start: Optional[ContextHandler] = None,
+        on_success: Optional[ContextHandler] = None,
+        on_failure: Optional[ContextHandler] = None,
+        on_complete: Optional[ContextHandler] = None,
         publish_result: bool = True,
-        max_instances: int | None = None,
-        instance_timeout: float | None = None,
+        max_instances: Optional[int] = None,
+        instance_timeout: Optional[float] = None,
     ):
         self.func = func
         self.topic = topic
@@ -284,7 +286,7 @@ class TaskRunner(Observable):
             if self.pool:
                 self.pool.release()
 
-    def _execute(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    def _execute(self, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
         """Internal execution logic."""
         # 2. Create context. ``uuid4().hex`` is ~25% faster than ``str(uuid4())``
         # (skips the canonical 8-4-4-4-12 hyphenation pass) and still gives
@@ -373,16 +375,16 @@ class TaskRunner(Observable):
 
 
 def task(
-    queue: Any | None = None,
-    topic: str | None = None,
-    executor: Executor | None = None,
-    on_execute: list[Any] | None = None,
-    on_success: ContextHandler | None = None,
-    on_failure: ContextHandler | None = None,
-    on_complete: ContextHandler | None = None,
+    queue: Optional[Any] = None,
+    topic: Optional[str] = None,
+    executor: Optional[Executor] = None,
+    on_execute: Optional[List[Any]] = None,
+    on_success: Optional[ContextHandler] = None,
+    on_failure: Optional[ContextHandler] = None,
+    on_complete: Optional[ContextHandler] = None,
     publish_result: bool = True,
-    max_instances: int | None = None,
-    instance_timeout: float | None = None,
+    max_instances: Optional[int] = None,
+    instance_timeout: Optional[float] = None,
 ) -> Callable[[Callable[..., Any]], TaskCallable]:
     """Decorator that creates a callable task with full lifecycle support.
 

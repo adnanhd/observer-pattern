@@ -39,6 +39,7 @@ import importlib
 import logging
 import signal
 from collections.abc import Callable
+from typing import Dict, List, Optional, Tuple
 
 from eventforge import MessageQueue, RPCServer
 from eventforge.transports.tcp import TCPServerTransport
@@ -48,7 +49,7 @@ logger = logging.getLogger("eventforge.worker")
 
 def _load_handlers(
     module_path: str,
-) -> tuple[dict[str, Callable[..., object]], str | None]:
+) -> Tuple[Dict[str, Callable[..., object]], Optional[str]]:
     """Import ``module_path`` and return its ``(HANDLERS, SERVICE_NAME)``.
 
     Raises SystemExit with a clear message on the common failure modes
@@ -80,7 +81,7 @@ def serve(
     module_path: str,
     host: str = "0.0.0.0",
     port: int = 9090,
-    service_name: str | None = None,
+    service_name: Optional[str] = None,
 ) -> None:
     """Bind a TCP RPC server exposing ``module_path``'s HANDLERS and block."""
     handlers, module_service = _load_handlers(module_path)
@@ -119,7 +120,7 @@ def serve(
         logger.info("worker: stopped")
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m eventforge.worker",
         description="Run a module's HANDLERS as an RPC server over TCP.",
