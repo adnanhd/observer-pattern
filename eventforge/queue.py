@@ -17,8 +17,10 @@ Three equivalent ways to subscribe::
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
-from typing import Any, Dict, List, Optional, Tuple, Union, overload
+
+# ``Callable`` is subscripted at runtime in the Handler aliases below; the
+# typing alias is required on Python 3.8 (collections.abc generics are 3.9+).
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, overload
 from uuid import uuid4
 
 from eventforge.observers import BroadcastDispatcher, Dispatcher, Eventful, Observable
