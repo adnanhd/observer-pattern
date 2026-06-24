@@ -446,6 +446,27 @@ class Node:
         with self._lock:
             return self._in_flight / self.capacity
 
+    def try_acquire(self) -> bool:
+        """Atomically reserve one slot iff the node has spare local capacity.
+
+        Returns ``True`` (and bumps in-flight) when a slot was free, else
+        ``False`` without changing state. Lets a scheduler make the
+        select-and-reserve step atomic so two concurrent picks cannot
+        double-book a capacity-1 node. Pair every ``True`` with
+        :meth:`release`.
+        """
+        with self._lock:
+            if self._in_flight >= self.capacity:
+                return False
+            self._in_flight += 1
+            return True
+
+    def release(self) -> None:
+        """Release a slot reserved by :meth:`try_acquire` (never below zero)."""
+        with self._lock:
+            if self._in_flight > 0:
+                self._in_flight -= 1
+
 
 # =============================================================================
 # Meter -- Observable + aggregator + lifecycle convention
