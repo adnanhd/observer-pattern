@@ -215,11 +215,18 @@ class ConcurrentDispatcher(Dispatcher):
 
 
 class LeastLoadedDispatcher(Dispatcher):
-    """Ask each subscriber for its load and route to the least-loaded.
+    """Route each fire to the least-loaded subscriber, reserving atomically.
 
-    Subscribers must expose ``load() -> float`` (e.g. :class:`Node`
-    instances). Saturated subscribers (load >= 1.0) are skipped.
+    Subscribers expose ``load() -> float``; saturated ones (load >= 1.0) are
+    skipped. When a subscriber is a :class:`Node`, selection *reserves* a slot
+    (via :meth:`Node.try_acquire`) under a lock, so two concurrent fires cannot
+    both land on the same capacity-1 node -- the reservation is held for the
+    call and released after. Plain ``load()``-only subscribers (no reservation
+    support) fall back to best-effort load routing, as before.
     """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
 
     def dispatch(
         self,
@@ -229,15 +236,30 @@ class LeastLoadedDispatcher(Dispatcher):
     ) -> None:
         if not subscribers:
             return
-        nodes = cast("list[LoadAware]", subscribers)
-        available = [(s, s.load()) for s in nodes if s.load() < 1.0]
-        if not available:
-            raise RuntimeError("all subscribers saturated")
-        pick = min(available, key=lambda x: x[1])[0]
+        chosen: Any = None
+        reserved = False
+        # Select-and-reserve under one lock so the pick can't go stale between
+        # reading load() and committing to a node.
+        with self._lock:
+            for sub in sorted(subscribers, key=lambda s: cast("LoadAware", s).load()):
+                if isinstance(sub, Node):
+                    if sub.try_acquire():
+                        chosen, reserved = sub, True
+                        break
+                elif cast("LoadAware", sub).load() < 1.0:
+                    chosen = sub
+                    break
+            if chosen is None:
+                raise RuntimeError("all subscribers saturated")
         try:
-            pick(*args, **kwargs)
+            # A reserved Node already counts the slot, so invoke its handler
+            # directly (its __call__ would double-count); others via __call__.
+            (chosen.handler if reserved else chosen)(*args, **kwargs)
         except Exception:
-            logger.exception("least-loaded subscriber failed: %r", pick)
+            logger.exception("least-loaded subscriber failed: %r", chosen)
+        finally:
+            if reserved:
+                chosen.release()
 
 
 # =============================================================================
