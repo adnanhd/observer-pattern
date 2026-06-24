@@ -204,6 +204,44 @@ class TestNode:
         t.join(timeout=2.0)
         assert n.load() == 0.0
 
+    def test_try_acquire_respects_capacity(self):
+        n = Node("w", cpus=4, memory_gb=8, gpus=[0, 1], handler=lambda: None)
+        assert n.capacity == 2
+        assert n.try_acquire() is True  # 1/2
+        assert n.load() == 0.5
+        assert n.try_acquire() is True  # 2/2
+        assert n.load() == 1.0
+        assert n.try_acquire() is False  # saturated, state unchanged
+        assert n.load() == 1.0
+        n.release()
+        assert n.load() == 0.5
+        assert n.try_acquire() is True
+
+    def test_release_never_goes_negative(self):
+        n = Node("w", cpus=4, memory_gb=8, gpus=[0], handler=lambda: None)
+        n.release()
+        n.release()
+        assert n.load() == 0.0
+        assert n.try_acquire() is True
+
+    def test_try_acquire_is_atomic_under_contention(self):
+        # Capacity-1 node hammered by many threads: exactly one wins per slot.
+        n = Node("w", cpus=4, memory_gb=8, gpus=[0], handler=lambda: None)
+        wins = []
+        barrier = threading.Barrier(20)
+
+        def race():
+            barrier.wait()
+            if n.try_acquire():
+                wins.append(1)
+
+        threads = [threading.Thread(target=race) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=2.0)
+        assert sum(wins) == 1  # never double-booked
+
 
 # =============================================================================
 # Meter
