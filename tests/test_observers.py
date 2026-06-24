@@ -172,6 +172,38 @@ class TestDispatchers:
         with pytest.raises(RuntimeError, match="saturated"):
             LeastLoadedDispatcher().dispatch([Sat(), Sat()], (), {})
 
+    def test_least_loaded_reserves_node_atomically(self):
+        # A capacity-1 Node under concurrent dispatch is reserved for the call's
+        # duration: a second dispatch sees it saturated, and it never runs the
+        # handler twice at once (nor double-counts its load).
+        import concurrent.futures as cf
+        import time as _t
+
+        gate = threading.Event()
+        peak = {"now": 0, "max": 0}
+        plock = threading.Lock()
+
+        def handler(*a, **kw):
+            with plock:
+                peak["now"] += 1
+                peak["max"] = max(peak["max"], peak["now"])
+            gate.wait(timeout=2.0)
+            with plock:
+                peak["now"] -= 1
+
+        node = Node("w", cpus=4, memory_gb=8, gpus=[0], handler=handler)
+        disp = LeastLoadedDispatcher()
+        with cf.ThreadPoolExecutor(max_workers=2) as ex:
+            running = ex.submit(disp.dispatch, [node], (), {})
+            _t.sleep(0.2)
+            assert node.load() == 1.0  # reserved (not 2.0 -> no double count)
+            with pytest.raises(RuntimeError, match="saturated"):
+                disp.dispatch([node], (), {})  # already reserved
+            gate.set()
+            running.result(timeout=3.0)
+        assert peak["max"] == 1  # never two handler runs at once
+        assert node.load() == 0.0  # released after the call
+
 
 # =============================================================================
 # Node
