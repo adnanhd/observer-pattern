@@ -228,6 +228,45 @@ class LeastLoadedDispatcher(Dispatcher):
     def __init__(self) -> None:
         self._lock = threading.Lock()
 
+    def _select(self, subscribers: List[Callable[..., Any]]) -> "Tuple[Any, bool]":
+        """Atomically pick and reserve the least-loaded subscriber.
+
+        Returns ``(subscriber, reserved)`` -- ``reserved`` is True when it's a
+        :class:`Node` whose slot was taken (the caller must ``release()``).
+        Selection runs under one lock so the pick can't go stale between
+        reading ``load()`` and committing. Raises if every subscriber is full.
+        """
+        with self._lock:
+            for sub in sorted(subscribers, key=lambda s: cast("LoadAware", s).load()):
+                if isinstance(sub, Node):
+                    if sub.try_acquire():
+                        return sub, True
+                elif cast("LoadAware", sub).load() < 1.0:
+                    return sub, False
+        raise RuntimeError("all subscribers saturated")
+
+    def route(
+        self,
+        subscribers: List[Callable[..., Any]],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Select the least-loaded subscriber, invoke it, and return its result.
+
+        The result-returning counterpart of :meth:`dispatch` (which is
+        fire-and-forget): use this when a caller needs the value back -- e.g. a
+        scheduler running a job to completion. Reservation is held for the call
+        and released after; the subscriber's own exceptions propagate.
+        """
+        chosen, reserved = self._select(subscribers)
+        try:
+            # A reserved Node already counts the slot, so invoke its handler
+            # directly (its __call__ would double-count); others via __call__.
+            return (chosen.handler if reserved else chosen)(*args, **kwargs)
+        finally:
+            if reserved:
+                chosen.release()
+
     def dispatch(
         self,
         subscribers: List[Callable[..., Any]],
@@ -236,24 +275,8 @@ class LeastLoadedDispatcher(Dispatcher):
     ) -> None:
         if not subscribers:
             return
-        chosen: Any = None
-        reserved = False
-        # Select-and-reserve under one lock so the pick can't go stale between
-        # reading load() and committing to a node.
-        with self._lock:
-            for sub in sorted(subscribers, key=lambda s: cast("LoadAware", s).load()):
-                if isinstance(sub, Node):
-                    if sub.try_acquire():
-                        chosen, reserved = sub, True
-                        break
-                elif cast("LoadAware", sub).load() < 1.0:
-                    chosen = sub
-                    break
-            if chosen is None:
-                raise RuntimeError("all subscribers saturated")
+        chosen, reserved = self._select(subscribers)  # saturated propagates
         try:
-            # A reserved Node already counts the slot, so invoke its handler
-            # directly (its __call__ would double-count); others via __call__.
             (chosen.handler if reserved else chosen)(*args, **kwargs)
         except Exception:
             logger.exception("least-loaded subscriber failed: %r", chosen)

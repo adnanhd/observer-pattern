@@ -172,6 +172,24 @@ class TestDispatchers:
         with pytest.raises(RuntimeError, match="saturated"):
             LeastLoadedDispatcher().dispatch([Sat(), Sat()], (), {})
 
+    def test_least_loaded_route_returns_result(self):
+        node = Node(
+            "w", cpus=4, memory_gb=8, gpus=[0], handler=lambda x: ("ran", x * 2)
+        )
+        disp = LeastLoadedDispatcher()
+        assert disp.route([node], 21) == ("ran", 42)
+        assert node.load() == 0.0  # released after the call
+
+    def test_least_loaded_route_propagates_and_releases_on_error(self):
+        def boom(_):
+            raise ValueError("nope")
+
+        node = Node("w", cpus=4, memory_gb=8, gpus=[0], handler=boom)
+        disp = LeastLoadedDispatcher()
+        with pytest.raises(ValueError, match="nope"):
+            disp.route([node], 1)
+        assert node.load() == 0.0  # released even though the call raised
+
     def test_least_loaded_reserves_node_atomically(self):
         # A capacity-1 Node under concurrent dispatch is reserved for the call's
         # duration: a second dispatch sees it saturated, and it never runs the
