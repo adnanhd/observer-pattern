@@ -55,7 +55,7 @@ class TestEventful:
         e.fire(2)
         assert results == [1]
 
-    def test_failing_subscriber_does_not_stop_chain(self):
+    def test_failing_subscriber_propagates(self):
         e = Eventful()
         ok = []
 
@@ -64,7 +64,22 @@ class TestEventful:
 
         e.on(bad)
         e.on(lambda x: ok.append(x))
-        e.fire("ping")
+        with pytest.raises(RuntimeError, match="boom"):
+            e.fire("ping")
+        # bad() ran before raising; the subscriber after it never got a turn.
+        assert ok == []
+
+    def test_earlier_subscribers_run_before_later_one_raises(self):
+        e = Eventful()
+        ok = []
+
+        def bad(x):
+            raise RuntimeError("boom")
+
+        e.on(lambda x: ok.append(x))
+        e.on(bad)
+        with pytest.raises(RuntimeError, match="boom"):
+            e.fire("ping")
         assert ok == ["ping"]
 
     def test_round_robin_dispatch(self):

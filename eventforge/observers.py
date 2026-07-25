@@ -149,7 +149,25 @@ class Dispatcher(ABC):
 
 
 class BroadcastDispatcher(Dispatcher):
-    """Default: call every subscriber in order; swallow each one's exceptions."""
+    """Default: call every subscriber in order; a subscriber's exception
+    propagates out of ``dispatch`` (and thus out of ``fire``).
+
+    Earlier subscribers in the list still run and any side effects they had
+    already committed stand -- broadcast delivery isn't transactional -- but
+    the first exception aborts the remaining subscribers for this fire and
+    surfaces to the caller instead of being logged and swallowed. A buggy or
+    assertion-raising subscriber must be able to fail the operation it's
+    observing, not just get an exception logged while the caller sails on.
+
+    This is unconditional: there is no opt-in to swallow again. Fire-and-log
+    is still available where it's genuinely wanted -- ``ConcurrentDispatcher``
+    logs submit failures since subscribers run out-of-band, and the
+    class-level (``@observe``/``Reporter``) subscriber path in :meth:`Eventful.fire`
+    isolates its own subscribers because reporting/metrics code should not be
+    able to break the thing it's reporting on. Competing-consumer delivery
+    (:class:`~eventforge.work_queue.WorkQueue`) has its own ack/nack/DLQ
+    failure isolation and does not go through this dispatcher.
+    """
 
     def dispatch(
         self,
@@ -158,10 +176,7 @@ class BroadcastDispatcher(Dispatcher):
         kwargs: Dict[str, Any],
     ) -> None:
         for fn in subscribers:
-            try:
-                fn(*args, **kwargs)
-            except Exception:
-                logger.exception("broadcast subscriber failed: %r", fn)
+            fn(*args, **kwargs)
 
 
 class RoundRobinDispatcher(Dispatcher):
