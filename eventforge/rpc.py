@@ -35,6 +35,7 @@ class RPCServer:
         self._executor = executor or Executor()
         self._service_name = service_name
         self._methods: Dict[str, Callable[..., Any]] = {}
+        self._methods_lock = threading.Lock()
         self._running = False
         self._sub_id: Optional[str] = None
         self._stop_event = threading.Event()
@@ -46,14 +47,16 @@ class RPCServer:
 
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             method_name = name or func.__name__
-            self._methods[method_name] = func
+            with self._methods_lock:
+                self._methods[method_name] = func
             return func
 
         return decorator
 
     def add_method(self, name: str, func: Callable[..., Any]) -> None:
         """Register method directly."""
-        self._methods[name] = func
+        with self._methods_lock:
+            self._methods[name] = func
 
     def serve(self, blocking: bool = True) -> None:
         """Subscribe the dispatch handler to the request topic. When
@@ -110,7 +113,8 @@ class RPCServer:
                 self._queue.publish(msg.reply_to, response.model_dump())
             return
 
-        method = self._methods.get(request.method)
+        with self._methods_lock:
+            method = self._methods.get(request.method)
         if not method:
             if msg.reply_to:
                 response = RPCResponse(

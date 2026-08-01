@@ -38,6 +38,7 @@ from eventforge.transports import (
     TCPClientTransport,
     TCPServerTransport,
     Transport,
+    TransportFullError,
 )
 from eventforge.types import (
     Message,
@@ -68,6 +69,7 @@ __all__ = [
     "ExecutionContext",
     # Transport
     "Transport",
+    "TransportFullError",
     "MemoryTransport",
     "TCPServerTransport",
     "TCPClientTransport",

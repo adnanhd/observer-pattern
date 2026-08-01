@@ -74,8 +74,11 @@ class WorkQueue(MessageQueue):
         self._wq_lock = threading.RLock()
         self._pending: Dict[str, deque[Message]] = defaultdict(deque)
         self._in_flight: Dict[str, InFlightEntry] = {}
+        # Each entry keeps the consumer_id alongside its handler so
+        # remove_consumer() can remove the exact handler that was
+        # registered under a given id, rather than an arbitrary one.
         self._consumer_groups: Dict[
-            Tuple[str, str], List[Callable[[Message], None]]
+            Tuple[str, str], List[Tuple[str, Callable[[Message], None]]]
         ] = defaultdict(list)
         self._rr_index: Dict[Tuple[str, str], int] = defaultdict(int)
         self._consumer_registry: Dict[str, Tuple[str, str]] = {}
@@ -162,7 +165,7 @@ class WorkQueue(MessageQueue):
         consumer_id = str(uuid4())
 
         with self._wq_lock:
-            self._consumer_groups[(topic, group)].append(handler)
+            self._consumer_groups[(topic, group)].append((consumer_id, handler))
             self._consumer_registry[consumer_id] = (topic, group)
 
         self._try_dispatch(topic)
@@ -281,10 +284,13 @@ class WorkQueue(MessageQueue):
             key = self._consumer_registry.pop(consumer_id, None)
             if key is None:
                 return False
-            handlers = self._consumer_groups.get(key)
-            if handlers:
-                handlers.pop()
-                if not handlers:
+            entries = self._consumer_groups.get(key)
+            if entries:
+                for i, (cid, _handler) in enumerate(entries):
+                    if cid == consumer_id:
+                        entries.pop(i)
+                        break
+                if not entries:
                     del self._consumer_groups[key]
                     self._rr_index.pop(key, None)
             return True
@@ -354,8 +360,8 @@ class WorkQueue(MessageQueue):
                 dispatched = False
 
                 for key in groups:
-                    handlers = self._consumer_groups.get(key)
-                    if not handlers:
+                    entries = self._consumer_groups.get(key)
+                    if not entries:
                         continue
 
                     if len(groups) > 1:
@@ -364,8 +370,8 @@ class WorkQueue(MessageQueue):
                         msg_copy = msg
 
                     delivered = self._make_in_flight(msg_copy, topic, key[1])
-                    idx = self._rr_index[key] % len(handlers)
-                    handler = handlers[idx]
+                    idx = self._rr_index[key] % len(entries)
+                    _consumer_id, handler = entries[idx]
                     self._rr_index[key] = idx + 1
                     dispatched = True
 
@@ -428,6 +434,7 @@ class WorkQueue(MessageQueue):
         while self._reaper_running:
             now = time.monotonic()
             expired: List[InFlightEntry] = []
+            requeued_topics: set[str] = set()
 
             with self._wq_lock:
                 for delivery_id, entry in list(self._in_flight.items()):
@@ -446,6 +453,7 @@ class WorkQueue(MessageQueue):
                             update={"headers": new_headers}
                         )
                         self._pending[entry.topic].appendleft(requeued)
+                        requeued_topics.add(entry.topic)
                     else:
                         self._dead_letter(
                             entry.message,
@@ -455,5 +463,12 @@ class WorkQueue(MessageQueue):
 
                 if expired:
                     self._pending_condition.notify_all()
+
+            # Outside the lock: hand timed-out-and-requeued messages back to
+            # push-consumers too, not just pull-side dequeue() waiters --
+            # otherwise a topic served only via consume() would starve until
+            # something unrelated happened to call enqueue() on it again.
+            for topic in requeued_topics:
+                self._try_dispatch(topic)
 
             time.sleep(self._reaper_interval)

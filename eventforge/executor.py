@@ -84,30 +84,41 @@ class Executor:
         return self._mode
 
     def start(self) -> None:
-        """Start executor pool."""
-        if self._running:
-            return
+        """Start executor pool.
 
-        if self._mode == ExecutionMode.THREAD:
-            self._pool = ThreadPoolExecutor(max_workers=self._max_workers)
-        elif self._mode == ExecutionMode.PROCESS:
-            self._pool = ProcessPoolExecutor(max_workers=self._max_workers)
+        The running-flag check and pool construction are one atomic
+        critical section under ``self._lock`` -- two threads calling
+        ``submit()`` concurrently on a fresh THREAD/PROCESS executor can no
+        longer both pass the guard and each construct (and leak) their own
+        pool.
+        """
+        with self._lock:
+            if self._running:
+                return
 
-        self._running = True
+            if self._mode == ExecutionMode.THREAD:
+                self._pool = ThreadPoolExecutor(max_workers=self._max_workers)
+            elif self._mode == ExecutionMode.PROCESS:
+                self._pool = ProcessPoolExecutor(max_workers=self._max_workers)
+
+            self._running = True
         logger.info(
             "executor.start mode=%s max_workers=%d", self._mode.value, self._max_workers
         )
 
     def stop(self, wait: bool = True) -> None:
         """Stop executor pool."""
-        if not self._running:
-            return
+        with self._lock:
+            if not self._running:
+                return
 
-        if self._pool:
-            self._pool.shutdown(wait=wait)
+            pool = self._pool
             self._pool = None
-
-        self._running = False
+            self._running = False
+        # Shut down outside the lock -- shutdown(wait=True) can block for a
+        # while and must not stall concurrent submit()/start() callers.
+        if pool:
+            pool.shutdown(wait=wait)
         logger.info("executor.stop mode=%s", self._mode.value)
 
     def submit(
@@ -126,21 +137,22 @@ class Executor:
             with self._lock:
                 self._results[task_id] = result
         else:
-            if not self._running:
-                self.start()
+            # start() is idempotent and atomic under self._lock, so calling
+            # it unconditionally (rather than an unlocked "if not running")
+            # can't race two concurrent first-submit() callers into each
+            # constructing their own pool.
+            self.start()
 
-            assert self._pool is not None  # set by start() for non-sequential modes
+            with self._lock:
+                pool = self._pool
+            assert pool is not None  # set by start() for non-sequential modes
             future: Future[Union[TaskResult, Dict[str, Any]]]
             if self._mode == ExecutionMode.THREAD:
-                future = self._pool.submit(
-                    self._execute_sync, task_id, func, args, kwargs
-                )
+                future = pool.submit(self._execute_sync, task_id, func, args, kwargs)
             else:
                 # Process mode: ProcessPoolExecutor pickles func/args/kwargs
                 # internally to ship them to the worker.
-                future = self._pool.submit(
-                    _run_with_timing, task_id, func, args, kwargs
-                )
+                future = pool.submit(_run_with_timing, task_id, func, args, kwargs)
 
             with self._lock:
                 self._futures[task_id] = future
