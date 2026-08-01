@@ -9,6 +9,16 @@ from typing import Optional
 from eventforge.types import Message
 
 
+class TransportFullError(Exception):
+    """Raised when a bounded transport queue is at capacity on send().
+
+    Mirrors :class:`eventforge.work_queue.QueueFullError` -- fullness is
+    surfaced to the caller rather than silently dropping the message.
+    """
+
+    pass
+
+
 class Transport(ABC):
     """Abstract base for message transports."""
 

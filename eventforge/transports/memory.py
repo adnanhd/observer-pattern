@@ -7,11 +7,11 @@ import fnmatch
 import threading
 from collections import defaultdict
 from collections.abc import Callable
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from typing import Dict, List, Optional
 from uuid import uuid4
 
-from eventforge.transports.base import Transport
+from eventforge.transports.base import Transport, TransportFullError
 from eventforge.types import Message
 
 
@@ -33,21 +33,28 @@ class MemoryTransport(Transport):
         self._closed = False
 
     def send(self, message: Message) -> None:
-        """Send message to topic and notify subscribers."""
+        """Send message to topic and notify subscribers.
+
+        Live pub-sub subscribers (the primary delivery path, wired via
+        :meth:`subscribe`) are notified unconditionally -- capacity limits
+        below only bound the *separate* per-topic :class:`~queue.Queue` used
+        by :meth:`receive`/:meth:`request`. If that bounded queue is full,
+        the message is NOT silently dropped: :class:`TransportFullError` is
+        raised to the caller after subscribers have been notified, mirroring
+        how :meth:`~eventforge.work_queue.WorkQueue.enqueue` surfaces
+        fullness via ``QueueFullError`` instead of swallowing it.
+        """
         if self._closed:
             raise RuntimeError("Transport is closed")
 
         with self._lock:
-            # Add to queue
             topic = message.topic
-            try:
-                self._queues[topic].put_nowait(message)
-            except Exception:
-                pass  # Queue full, drop oldest would be better
 
-            # Notify matching subscribers. ``self._sub_topic[sub_id]`` gives
-            # the subscription's pattern in O(1); we only run the
-            # (potentially expensive) ``_matches`` check after that lookup.
+            # Notify matching subscribers first so pub-sub delivery never
+            # depends on whether anything ever drains the receive() queue
+            # for this topic. ``self._sub_topic[sub_id]`` gives the
+            # subscription's pattern in O(1); we only run the (potentially
+            # expensive) ``_matches`` check after that lookup.
             for sub_id, callback in list(self._subscribers.items()):
                 sub_topic = self._sub_topic.get(sub_id)
                 if sub_topic is not None and self._matches(topic, sub_topic):
@@ -55,6 +62,16 @@ class MemoryTransport(Transport):
                         callback(message)
                     except Exception:
                         pass  # Don't let callback errors break send
+
+            # Bounded queue backing receive()/request(). Raise rather than
+            # silently drop when full -- see TransportFullError docstring.
+            try:
+                self._queues[topic].put_nowait(message)
+            except Full:
+                raise TransportFullError(
+                    f"transport queue for topic {topic!r} is full "
+                    f"({self._queues[topic].maxsize} messages)"
+                ) from None
 
     def receive(self, topic: str, timeout: Optional[float] = None) -> Optional[Message]:
         """Receive next message from topic (blocking)."""

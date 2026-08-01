@@ -364,7 +364,10 @@ class Eventful:
             for klass in type(self._owner).__mro__:
                 if klass is object:
                     continue
-                cls_subs = _CLASS_SUBSCRIBERS.get(klass, {}).get(self._name)
+                with _CLASS_SUBSCRIBERS_LOCK:
+                    cls_subs = list(
+                        _CLASS_SUBSCRIBERS.get(klass, {}).get(self._name, ())
+                    )
                 if not cls_subs:
                     continue
                 for fn in cls_subs:
@@ -622,28 +625,34 @@ class Meter(Observable):
         self.reset_event = Eventful(
             dispatcher=dispatcher, owner=self, name="reset_event"
         )
-        # Aggregator state
+        # Aggregator state, guarded by ``_state_lock`` so concurrent
+        # ``update()`` calls (e.g. a Meter attached to a task run under a
+        # THREAD executor or fanned out via ConcurrentDispatcher) can't lose
+        # updates to a read-modify-write race on sum/count/max/min.
+        self._state_lock = threading.Lock()
         self.reset()
 
     # ---- aggregator ----------------------------------------------------
 
     def reset(self) -> None:
-        self.last: float = 0.0
-        self.sum: float = 0.0
-        self.count: int = 0
-        self.max_val: float = 0.0
-        self.min_val: float = 0.0
+        with self._state_lock:
+            self.last: float = 0.0
+            self.sum: float = 0.0
+            self.count: int = 0
+            self.max_val: float = 0.0
+            self.min_val: float = 0.0
         self.reset_event.fire(self)
 
     def update(self, val: float, n: int = 1) -> None:
-        if self.count == 0:
-            self.max_val = self.min_val = val
-        else:
-            self.max_val = max(self.max_val, val)
-            self.min_val = min(self.min_val, val)
-        self.last = val
-        self.sum += val * n
-        self.count += n
+        with self._state_lock:
+            if self.count == 0:
+                self.max_val = self.min_val = val
+            else:
+                self.max_val = max(self.max_val, val)
+                self.min_val = min(self.min_val, val)
+            self.last = val
+            self.sum += val * n
+            self.count += n
         self.update_event.fire(self, val, n)
 
     @property
@@ -654,11 +663,16 @@ class Meter(Observable):
     @property
     def value(self) -> float:
         """The single reduced metric, per the ``reduction`` (e.g. mean / max)."""
-        return REDUCTIONS[self._reduction](self)
+        with self._state_lock:
+            return REDUCTIONS[self._reduction](self)
 
     @property
     def stats(self) -> Dict[str, float]:
-        return {"value": self.value, "count": float(self.count)}
+        with self._state_lock:
+            return {
+                "value": REDUCTIONS[self._reduction](self),
+                "count": float(self.count),
+            }
 
     def __repr__(self) -> str:
         return (
@@ -792,12 +806,14 @@ class Reporter(Observable):
 # :meth:`Eventful.fire` when the eventful was constructed with
 # ``owner`` + ``name``.
 _CLASS_SUBSCRIBERS: Dict[type, Dict[str, List[Callable[..., Any]]]] = {}
+_CLASS_SUBSCRIBERS_LOCK = threading.Lock()
 
 
 def _register_class_subscriber(
     target_cls: type, event: str, fn: Callable[..., Any]
 ) -> None:
-    _CLASS_SUBSCRIBERS.setdefault(target_cls, {}).setdefault(event, []).append(fn)
+    with _CLASS_SUBSCRIBERS_LOCK:
+        _CLASS_SUBSCRIBERS.setdefault(target_cls, {}).setdefault(event, []).append(fn)
 
 
 # Each entry: (attr_name, ((target_cls, event), ...)) -- the @observe targets

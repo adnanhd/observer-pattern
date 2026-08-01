@@ -9,12 +9,13 @@ third-party dependencies. Import them explicitly when needed:
 
 from __future__ import annotations
 
-from eventforge.transports.base import Transport
+from eventforge.transports.base import Transport, TransportFullError
 from eventforge.transports.memory import MemoryTransport
 from eventforge.transports.tcp import TCPClientTransport, TCPServerTransport
 
 __all__ = [
     "Transport",
+    "TransportFullError",
     "MemoryTransport",
     "TCPServerTransport",
     "TCPClientTransport",
